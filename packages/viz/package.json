@@ -1,0 +1,23 @@
+{
+  "name": "@openliulan/viz",
+  "version": "1.0.0",
+  "description": "条件触发式可视化调试面板：页面操作/诊断/Token 消耗的可视化回放，用户声明需要调试时启用，是 AI 伦理透明化的一部分",
+  "type": "module",
+  "main": "dist/index.js",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@openliulan/core": "1.0.0",
+    "@openliulan/mcp-server": "1.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "vitest": "^3.0.0",
+    "@types/node": "^20.0.0"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "name": "@openliulan/stealth",
+  "version": "1.0.0",
+  "description": "防检测模块：反指纹、反爬虫检测、人类行为模拟，保护数据采集用户不被限速/封禁",
+  "type": "module",
+  "main": "dist/index.js",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@openliulan/core": "1.0.0",
+    "playwright": "^1.45.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "vitest": "^3.0.0",
+    "@types/node": "^20.0.0"
+  }
+}
