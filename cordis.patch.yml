@@ -4,13 +4,10 @@
 # 安装器（dsh plugin --profile web add ...）据其在 profile 目录装载本插件行，
 # 把进程内 ForgeMCP 工具（browser_*）注册到 harness 的 ctx.tools。
 #
-# 工具命名前缀与浏览器模式可在该行 config 覆盖：
-#   config:
-#     prefix: browser      # 工具名前缀（默认 browser）
-#     headless: true       # 无头模式（默认 true）
-#     connectUrl: null     # 可选，CDP 连接已启动的浏览器
+# 注意（DSH 新版插件规则）：
+# - `name` 是**包名**（通过 profile 的 node_modules 解析），不是相对路径。
+# - 工具命名前缀与浏览器模式等可调参数由用户在自己的 cordis.patch.yml
+#   覆盖 config，无需在本文件预置，避免耦合用户的 profile 配置。
 - insert:
     - id: openliulan-browser
       name: '@openliulan/dsh-openliulan'
-      config:
-        prefix: browser

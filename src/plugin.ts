@@ -2,30 +2,36 @@
  * dsh-openliulan deepseek harness 进程内浏览器控制插件入口。
  *
  * 把 dsh-openliulan 的统一 AI 浏览器控制框架（ForgeMCP：observe / act /
- * diagnose / eval / screenshot / session_log / close）注册为 deepseek
- * harness 的原生工具，供 agent 的 tool_loop 直接调用，配合 harness 的
- * 原生 function calling / 多步规划 / 有状态会话能力。
+ * diagnose / eval / screenshot / session_log / close / stealth_status）
+ * 注册为 deepseek harness 的原生工具，供 agent 的 tool_loop 直接调用。
  *
- * 该入口是「可安装插件包」的装配点：顶层包 package.json 声明
- * `dsh.bundle.patch` 指向 cordis.patch.yml，由 dsh 可在 profile 目录一条
- * 命令（`dsh plugin --profile web add ...`）安装。构建时用 esbuild 把所有
- * `@openliulan/*` 源码内联成自包含的 lib/index.js，只外置已发布的
- * `playwright`，因此不依赖任何未发布 npm 包即可被他人安装。
+ * ## DSH 新版插件规则适配（2026-08）
+ *
+ * 新版本对插件有明确要求，不满足则旧插件不兼容：
+ *
+ * 1. **`inject = ['tools']`**：声明等待 host 的 `ctx.tools`（ToolRuntime）
+ *    服务就绪后再加载本插件。旧版直接访问 `ctx.tools` 会导致加载顺序不可靠。
+ * 2. **`parameters` 必须是完整 JSON Schema**：旧版只传 `properties`，
+ *    新版要求完整的 `{ type, properties, required }` 对象（ParameterJsonSchema）。
+ * 3. **`output.schema` 必须声明 `additionalProperties`**：新版要求显式
+ *    声明，否则工具注册会失败。
+ * 4. **`execute(args, exec)` 接受第二个参数**：新版签名是
+ *    `execute(args, exec: ToolRunContext)`，`exec.signal` 用于取消。
+ * 5. **`peerDependencies`**：package.json 必须声明 `@deepseek-ai/cordis`
+ *    版本，让安装器校验宿主版本兼容性。
  *
  * @module @openliulan/dsh-openliulan
  */
-import { ForgeMcp } from "@openliulan/mcp-server";
 import type { Context } from "@deepseek-ai/cordis";
+import { ForgeMcp } from "@openliulan/mcp-server";
 
 /** Cordis 插件名（用于 loader 诊断）。 */
 export const name = "openliulan-browser";
 /** 工具命名前缀，避免与 host 其它工具冲突。 */
 const DEFAULT_PREFIX = "browser";
 
-/** 进程内工具注册的最小 harness 契约（编译期仅作形状约束，运行期用宿主 ctx）。 */
-interface HarnessToolRegistry {
-  register(def: unknown): () => void;
-}
+/** 等待 host 的 `ctx.tools`（ToolRuntime）服务就绪后再加载本插件。 */
+export const inject = ["tools"] as const;
 
 /** 容错取值：把调用参数收敛为对象（模型可能输出裸值）。 */
 function toRecord(args: unknown): Record<string, unknown> {
@@ -59,11 +65,19 @@ export function apply(ctx: Context, config: Record<string, unknown> = {}): void 
     stealth: (config.stealth as never) ?? undefined,
   });
 
-  const tools = (ctx as unknown as { tools: HarnessToolRegistry }).tools;
+  // DSH 新版：通过 inject 声明后，ctx.tools 已由宿主保证就绪。
+  const tools = ctx.tools;
 
   for (const tool of mcp.tools) {
-    const parameters = (tool.inputSchema as { properties?: Record<string, unknown> }).properties ?? {};
     const publicName = `${prefix}_${tool.name}`;
+    // DSH 新版：parameters 必须是完整 ParameterJsonSchema
+    // （{ type, properties, required }），旧版只传 properties 不兼容。
+    const parameters = tool.inputSchema as {
+      type: "object";
+      properties: Record<string, unknown>;
+      required?: string[];
+    };
+
     ctx.effect(
       () =>
         tools.register({
@@ -71,14 +85,29 @@ export function apply(ctx: Context, config: Record<string, unknown> = {}): void 
           description: tool.description,
           parameters,
           output: {
+            // canonical value：{ content: [{ type: "text", text }] }
             schema: {
               type: "object",
-              properties: { content: { type: "array", items: {} } },
+              properties: {
+                content: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      type: { type: "string" },
+                      text: { type: "string" },
+                    },
+                    additionalProperties: true,
+                  },
+                },
+              },
               required: ["content"],
               additionalProperties: false,
             },
             render(_args: unknown, value: unknown): unknown[] {
-              const text = resultText(((value as { content?: { type?: string; text?: string }[] }) ?? {}).content ?? []);
+              const text = resultText(
+                ((value as { content?: { type?: string; text?: string }[] }) ?? {}).content ?? [],
+              );
               return [{ type: "text", text }];
             },
           },
@@ -86,10 +115,11 @@ export function apply(ctx: Context, config: Record<string, unknown> = {}): void 
             const result = await mcp.callTool(tool.name, toRecord(args));
             const text = resultText(result.content);
             if (!result.ok) throw new Error(text);
-            return { isError: false, value: { content: text }, content: [{ type: "text", text }] };
+            // 返回 canonical value，类型符合 output.schema 声明
+            return { content: [{ type: "text", text }] };
           },
         }),
-      "openliulan.tool",
+      `openliulan.tool.${publicName}`,
     );
   }
 }

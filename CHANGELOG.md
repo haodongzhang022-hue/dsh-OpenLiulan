@@ -5,6 +5,23 @@
 
 ---
 
+---
+
+## 最新版本（最高权重）· v1.3.0 — DSH 新版插件规则适配（2026-08-30）
+
+v1.3.0 适配 DSH 新版插件规则，解决旧插件在新版 DSH 中不兼容的问题：
+
+| 增强点 | 做了什么 |
+| :--- | :--- |
+| `inject` 声明 | `src/plugin.ts` 导出 `inject = ['tools']`，等待 host 的 `ctx.tools`（ToolRuntime）服务就绪后再加载，旧版直接访问 `ctx.tools` 导致加载顺序不可靠 |
+| `parameters` 完整 JSON Schema | 工具注册改为传递完整 `{ type, properties, required }` 的 ParameterJsonSchema，旧版只传 `properties` 在新版不兼容 |
+| `output.schema` 强化 | `additionalProperties` 显式声明，嵌套内容块 schema 类型更精确，符合新版 DSH 对 JSON Schema 子集的强制校验 |
+| `execute` 返回 canonical value | 返回符合 `output.schema` 声明的 canonical value，`render` 负责投影为模型内容块 |
+| `peerDependencies` | `package.json` 声明 `@deepseek-ai/cordis: ^4.0.1`，安装器据此校验宿主版本兼容性 |
+| `cordis.patch.yml` 精简 | `insert` 只保留 `id` 和 `name`，配置默认值交由代码内部处理，用户可在自己的 profile 中自由覆盖 |
+| 注册标签细化 | 每个工具注册的 effect 标签从单一 `openliulan.tool` 细化为 `openliulan.tool.<toolName>`，便于诊断定位 |
+
+
 ## 最新版本（最高权重）· v1.2.0 — 可安装 DSH 插件包（2026-08-29）
 
 v1.2.0 把 dsh-OpenLiulan 从「源码接入」升级为「一行命令可安装的 **DSH 插件包**」，对标 DSH Plugin Hub 的一键安装体验：
