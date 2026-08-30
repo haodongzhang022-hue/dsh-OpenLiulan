@@ -1,0 +1,13 @@
+# dsh-openliulan —— deepseek harness 插件装配补丁。
+#
+# 顶层包 package.json 通过 `dsh.bundle.patch` 指向本文件：
+# 安装器（dsh plugin --profile web add ...）据其在 profile 目录装载本插件行，
+# 把进程内 ForgeMCP 工具（browser_*）注册到 harness 的 ctx.tools。
+#
+# 注意（DSH 新版插件规则）：
+# - `name` 是**包名**（通过 profile 的 node_modules 解析），不是相对路径。
+# - 工具命名前缀与浏览器模式等可调参数由用户在自己的 cordis.patch.yml
+#   覆盖 config，无需在本文件预置，避免耦合用户的 profile 配置。
+- insert:
+    - id: openliulan-browser
+      name: '@openliulan/dsh-openliulan'
