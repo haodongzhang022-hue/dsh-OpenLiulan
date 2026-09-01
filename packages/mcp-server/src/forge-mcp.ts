@@ -10,6 +10,14 @@ import { DiagnosisCenter } from "@openliulan/diagnosis";
 import { compactSnapshot } from "@openliulan/token";
 import type { StealthOptions } from "@openliulan/stealth";
 import { TOOLS, okResult, errResult, type ToolResult, type McpToolSchema } from "./tools.js";
+import {
+  runModlens,
+  formatVisionEvidence,
+  formatVisionBrief,
+  resolveModlensCli,
+  runOpenCodeVision,
+  type VisionResult,
+} from "@openliulan/vision";
 import { SessionLogger } from "./logger.js";
 import { buildAIMessage, messageToContent, type AIMessage } from "./message.js";
 import type { ForgeAnyEvent } from "./events.js";
@@ -26,6 +34,17 @@ export interface ForgeMcpOptions {
   maxEvents?: number;
   /** 防检测配置（可选，默认关闭） */
   stealth?: StealthOptions;
+  /** 视觉桥配置（可选）：modlens 引擎 CLI 路径 / 超时（默认 180s）/ opencode 直连回退（可选） */
+  vision?: {
+    cliPath?: string;
+    timeoutMs?: number;
+    /** modlens 引擎不可用/欠费时是否用本机 opencode 直连回退（默认 true） */
+    opencodeFallback?: boolean;
+    /** 回退模型清单（默认 opencode-go vision-exp → copilot → deepseek 视觉） */
+    opencodeModels?: string[];
+    /** opencode 可执行文件路径（默认 PATH 查找） */
+    opencodeBin?: string;
+  };
 }
 
 export class ForgeMcp {
@@ -186,6 +205,98 @@ export class ForgeMcp {
             dataUri,
             fullPage: !!args.fullPage,
             caption: args.caption ? String(args.caption) : shot.summary,
+          });
+          break;
+        }
+
+        case "vision": {
+          // 成本阶梯 L1：截图 → modlens 视觉引擎 → 纯文本证据（OCR/布局/语义）
+          const b = await this.ensureBrowser();
+          const focus = args.focus ? String(args.focus).slice(0, 500) : undefined;
+          const fullPage = !!args.fullPage;
+          // 瞬时问题（字体缓存/渲染器温机）重试 1 次
+          let shot = await b.act({ type: "screenshot", fullPage } as never);
+          let base64 = (shot.data as Record<string, unknown> | undefined)?.base64;
+          if (!shot.ok || typeof base64 !== "string") {
+            await new Promise((r0) => setTimeout(r0, 1500));
+            shot = await b.act({ type: "screenshot", fullPage } as never);
+            base64 = (shot.data as Record<string, unknown> | undefined)?.base64;
+          }
+          if (!shot.ok || typeof base64 !== "string") {
+            result = errResult(`vision 前置截图失败（两次尝试）: ${shot.summary}`);
+            break;
+          }
+          // 落盘：默认系统临时目录；savePath 必须为绝对路径（防相对路径逃逸）
+          const { writeFileSync, mkdirSync } = await import("node:fs");
+          const { tmpdir } = await import("node:os");
+          const { join, resolve, dirname } = await import("node:path");
+          const ts = Date.now();
+          const rand = Math.random().toString(36).slice(2, 8);
+          const target = args.savePath ? resolve(String(args.savePath)) : join(tmpdir(), `openliulan-vision-${ts}-${rand}.png`);
+          if (!target.endsWith(".png") && !target.endsWith(".jpg")) {
+            result = errResult("vision savePath 必须以 .png 结尾（防任意文件写入）");
+            break;
+          }
+          mkdirSync(dirname(target), { recursive: true });
+          writeFileSync(target, Buffer.from(base64, "base64"));
+          // 调用 modlens 引擎（不强依赖安装：缺失时返回安装指引）
+          let visionResult: VisionResult = await runModlens({
+            imagePath: target,
+            focus,
+            cliPath: this.opts.vision?.cliPath,
+            timeoutMs: this.opts.vision?.timeoutMs ?? 180_000,
+          });
+          let evidenceText = formatVisionEvidence(visionResult, { focus });
+          if (!visionResult.ok) {
+            // 成本阶梯 L1 次级通道：modlens 引擎不可用/欠费时，试试本机 opencode 直连视觉
+            const fallback = this.opts.vision?.opencodeFallback ?? true;
+            if (fallback) {
+              const fb = await runOpenCodeVision({
+                imagePath: target,
+                focus,
+                models: this.opts.vision?.opencodeModels,
+                bin: this.opts.vision?.opencodeBin,
+                timeoutMs: this.opts.vision?.timeoutMs ?? 180_000,
+              });
+              if (fb.ok) {
+                evidenceText = formatVisionEvidence(fb, { focus }) + "\n> 注：本次由 opencode 直连回退完成（modlens 引擎不可用，见 docs/vision.md）。";
+                visionResult = fb;
+              } else {
+                result = errResult(evidenceText + "\n\n[opencode 回退也失败] " + (fb.error ?? ""));
+                this.logger.error({
+                  message: "vision 引擎失败: " + (visionResult.error ?? "").slice(0, 200),
+                  code: "VISION_ENGINE_FAILED",
+                  reason: "vision-engine-unavailable",
+                  raw: visionResult.error ?? "",
+                  explanation: "modlens 视觉引擎缺失或供应商未配置，opencode 直连回退亦失败；先安装/配置引擎（见 THIRD_PARTY_NOTICES.md 归属与 docs/vision.md）。",
+                  suggestion: "modlens: dsh plugin --profile web add liustack/modlens 且 node <modlens>/dist/main.js doctor 配置供应商（reuse.opencode 或 gemini-api.apiKey）；opencode: 检查登录与配额（opencode auth list）。",
+                });
+                break;
+              }
+            } else {
+              result = errResult(evidenceText);
+              this.logger.error({
+                message: "vision 引擎失败: " + (visionResult.error ?? "").slice(0, 200),
+                code: "VISION_ENGINE_FAILED",
+                reason: "vision-engine-unavailable",
+                raw: visionResult.error ?? "",
+                explanation: "modlens 视觉引擎缺失或供应商未配置；先安装/配置引擎（见 THIRD_PARTY_NOTICES.md 归属与 docs/vision.md）。",
+                suggestion: "安装 @liustack/modlens（dsh plugin --profile web add liustack/modlens）或设置 MODLENS_CLI_PATH；然后 node <modlens>/dist/main.js doctor 配置供应商（如 reuse.opencode）。",
+              });
+              break;
+            }
+          }
+          result = okResult(evidenceText, {
+            imagePath: target,
+            provider: visionResult.provider,
+            model: visionResult.model,
+            usage: visionResult.usage,
+            uncertainty: visionResult.uncertainty,
+          });
+          this.logger.log({
+            category: "vision",
+            message: `vision 完成: ${formatVisionBrief(visionResult)}`,
+            payload: { imagePath: target, provider: visionResult.provider },
           });
           break;
         }

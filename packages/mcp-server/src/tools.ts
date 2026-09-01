@@ -5,11 +5,17 @@
  * deepseek harness、cnb.cool、Claude Desktop 等）调用。
  *
  * 工具设计原则（借鉴 Chrome DevTools MCP 的调试优先 + 高效）：
- * - observe：高效页面快照（替代冗长 DOM dump）
+ * - observe：高效页面快照（替代冗长 DOM dump）——成本阶梯 L0（纯文本，零成本）
  * - act：统一动作执行
  * - diagnose：5 星调试诊断
  * - eval：注入 JS 高级诊断
+ * - vision：截图 + modlens 视觉引擎 → 纯文本证据 —— 成本阶梯 L1
+ * - screenshot：原生图片（多模态模型可见）—— 成本阶梯 L2，最后手段
+ *
+ * 视觉成本阶梯见 @openliulan/vision 的 VISION_LADDER：L0 → L1 → L2 逐级升级。
  */
+import { VISION_TOOL_DESCRIPTION } from "@openliulan/vision";
+
 export interface McpToolSchema {
   name: string;
   description: string;
@@ -21,7 +27,7 @@ export const TOOLS: McpToolSchema[] = [
   {
     name: "observe",
     description:
-      "获取当前页面的高效快照。返回精简后的可交互元素索引（带 ref）与页面统计。Token 友好，是理解页面的首选。",
+      "获取当前页面的高效快照。返回精简后的可交互元素索引（带 ref）与页面统计。Token 友好，是理解页面的首选。（成本阶梯 L0：纯文本 DOM 快照，零额外成本，是理解页面的默认第一步）",
     inputSchema: {
       type: "object",
       properties: {
@@ -84,7 +90,7 @@ export const TOOLS: McpToolSchema[] = [
   {
     name: "screenshot",
     description:
-      "截取当前页面（可整页），返回 base64 图片，用于视觉确认。截图会作为图片事件写入会话日志，供多模态 AI 消费。",
+      "截取当前页面（可整页），返回 base64 图片，用于视觉确认。截图会作为图片事件写入会话日志，供多模态 AI 消费。（成本阶梯 L2 最后手段：原生图片仅多模态模型可见并计费；纯文本模型请优先用 vision L1 获取文本证据）",
     inputSchema: {
       type: "object",
       properties: {
@@ -115,7 +121,18 @@ export const TOOLS: McpToolSchema[] = [
     description: "查看防检测（Stealth）模块状态：是否启用、级别、UA 策略等。防检测用于避免被目标站点识别为爬虫而限速/封禁。",
     inputSchema: { type: "object", properties: {} },
   },
-];
+  {
+    name: "vision",
+    description: VISION_TOOL_DESCRIPTION,
+    inputSchema: {
+      type: "object",
+      properties: {
+        focus: { type: "string", description: "关注点（可选）：告诉引擎重点看什么，如“页面中间的弹窗文案与按钮颜色”" },
+        fullPage: { type: "boolean", description: "是否整页截图（默认仅视口）" },
+        savePath: { type: "string", description: "可选：截图 PNG 的绝对路径（默认系统临时目录）" },
+      },
+    },
+  },];
 
 /** 工具调用结果（协议无关的标准响应结构） */
 export interface ToolResult {

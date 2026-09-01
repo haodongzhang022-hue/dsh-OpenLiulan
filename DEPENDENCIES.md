@@ -32,6 +32,13 @@ npx playwright install chromium
 | `playwright` | `^1.45.0`（锁定 1.62.1） | `@openliulan/engines` | 浏览器启动、CDP 连接、DOM 操作、导航、点击、输入、截图和断言等底层浏览器自动化。 |
 | `zod` | `^3.23.0` | `@openliulan/core` | 统一动作、输入参数与核心数据结构的运行时校验。 |
 
+## 可选依赖（视觉引擎，成本阶梯 L1）
+
+| 包 | 版本 | 所属模块 | 作用 |
+| :--- | :--- | :--- | :--- |
+| `@liustack/modlens`（可选，MIT） | `>= 3.25.0`（peerDependencies，optional） | `@openliulan/vision` | 「vision」工具的默认视觉引擎：截图 → OCR/布局/语义纯文本证据。缺失时工具给出安装指引，并自动回退到本机 opencode 直连通道。归属声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。 |
+| opencode CLI（可选回退通道） | 本机已安装即可（PATH / OPENCODE_BIN） | `@openliulan/vision` | modlens 引擎不可用/欠费时的 L1 次级通道：`opencode run --format json -f <图>` 直连视觉模型，复用 opencode 登录与配额。 |
+
 ## 开发与构建依赖
 
 | 包 | 版本 | 用途 |
@@ -50,7 +57,8 @@ npx playwright install chromium
 ├── @openliulan/engines
 ├── @openliulan/diagnosis
 ├── @openliulan/token
-└── @openliulan/ai-layer
+├── @openliulan/ai-layer
+└── @openliulan/vision
 
 @openliulan/engines
 ├── @openliulan/core

@@ -42,6 +42,31 @@ dsh plugin --profile web add @openliulan/dsh-openliulan@latest # 旧版本缺陷
 
 ---
 
+## 👁 视觉能力（Vision Bridge）：纯文本模型也能「看见」
+
+> 从 **v1.3.0（2026-08-30，特性分支 feat/vision-modlens）** 起，新增 `vision` 工具（MCP: `vision`，插件前缀: `*_vision`）：
+> **截图 → 视觉引擎 → 纯文本证据**（OCR 全文 + 布局区域阅读顺序 + 语义场景/实体 + 不确定项），
+> 让**纯文本模型**在浏览器任务中获得可消费的「视觉」，不必为了看图切换到多模态模型。
+
+### 成本阶梯（什么时候用视觉，什么时候用纯文本）
+
+| 层级 | 手段 | 成本 | 什么时候用 |
+| :--- | :--- | :--- | :--- |
+| **L0** | `observe`（DOM 快照）/ `act extract` / `act evaluate` | 零额外成本、最快 | 默认第一步：答案能从 DOM/文本/属性拿到时 |
+| **L1** | `vision`（截图 → modlens 视觉引擎 → 文本证据） | 低（本地/低价视觉通道） | L0 回答不了「页面长什么样/是否可见/居中重叠/颜色样式/图表图片内容/Canvas 渲染」时 |
+| **L2** | `screenshot`（原生 PNG，仅多模态模型可见） | 高（视觉计费） | L0+L1 结合仍无法解决（精细像素级比对等）且模型支持图片输入时 |
+
+**规则**：默认 L0 → 有视觉需求先 L1 → L0+L1 都解决不了才 L2。纯文本模型看到 `screenshot` 的图片等于没有，直接用 `vision`。
+
+### 引擎与配置
+
+- **主引擎**：[liustack/modlens](https://github.com/liustack/modlens)（MIT，归属声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)）：`dsh plugin --profile web add liustack/modlens` 安装后自动被发现；供应商配置 `node <modlens>/dist/main.js doctor`。
+- **回退通道**：主引擎缺失/欠费时自动尝试本机 opencode 直连（`opencode run --format json -f <图>`），默认模型 `opencode-go/deepseek-v4-flash-vision-exp`（可配置 `vision.opencodeModels` / `OPENCODE_BIN`）。
+- **手动指定引擎**：环境变量 `MODLENS_CLI_PATH` 指向 `dist/main.js`，或插件配置 `vision.cliPath`。
+- 详细策略与故障排查见 [docs/vision.md](docs/vision.md)。
+
+---
+
 ## ✨ 为什么选择 dsh-OpenLiulan？
 
 市面上浏览器自动化工具很多，但**各有短板**。dsh-OpenLiulan 把它们的长处拼在一起，取长补短：

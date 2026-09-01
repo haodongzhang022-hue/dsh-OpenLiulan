@@ -253,9 +253,11 @@ export class PlaywrightEngine implements BrowserEngine {
       }
 
       case "screenshot": {
+        // animations/caret 禁用：自动化截图标准做法，避免动画/光标导致截图一直“等待渲染完成”
+        const snapOpts = { clip: action.clip, animations: "disabled" as const, caret: "hide" as const };
         const buf = action.fullPage
-          ? await this.page.screenshot({ fullPage: true, clip: action.clip })
-          : await this.page.screenshot({ clip: action.clip });
+          ? await this.page.screenshot({ fullPage: true, ...snapOpts })
+          : await this.page.screenshot(snapOpts);
         const base64 = buf.toString("base64");
         return {
           ok: true,

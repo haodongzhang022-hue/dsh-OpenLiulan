@@ -25,7 +25,8 @@ export type EventCategory =
   | "screenshot" // 图片/截图
   | "log" // 普通日志
   | "system" // 系统生命周期（start/shutdown/session）
-  | "knowledge"; // 知识库/方案注入
+  | "knowledge" // 知识库/方案注入
+  | "vision"; // 视觉证据（modlens 引擎，成本阶梯 L1）
 
 /**
  * 统一事件（ErrorEvent 之外的通用事件）。

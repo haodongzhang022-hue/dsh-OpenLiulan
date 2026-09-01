@@ -1,0 +1,28 @@
+import { describe, it, expect } from "vitest";
+import { parseOpenCodeEvents, extractJson } from "../src/opencode.js";
+
+describe("opencode fallback", () => {
+  it("解析事件流：收集 text、tokens、error", () => {
+    const raw = [
+      '{"type":"step_start","part":{"type":"step-start"}}',
+      '{"type":"text","part":{"type":"text","text":"{\\"ok\\": true}"}}',
+      '{"type":"step_finish","part":{"tokens":{"total":10},"cost":0.001}}',
+    ].join("\n");
+    const ev = parseOpenCodeEvents(raw);
+    expect(ev.texts.join("")).toContain('"ok"');
+    expect(ev.tokens).toEqual({ total: 10 });
+    expect(ev.error).toBeUndefined();
+  });
+  it("error 事件进入 error 字段", () => {
+    const raw = '{"type":"error","error":{"data":{"message":"Insufficient balance"}}}';
+    const ev = parseOpenCodeEvents(raw);
+    expect(ev.error).toContain("Insufficient balance");
+  });
+  it("extractJson 容忍前后缀", () => {
+    const j = extractJson('prefix {"a": 1} suffix');
+    expect(j).toEqual({ a: 1 });
+  });
+  it("非法回答返回 null", () => {
+    expect(extractJson("no json here")).toBeNull();
+  });
+});

@@ -216,8 +216,13 @@ describe("harness 工具映射", () => {
     for (const p of ["fullPage", "deltaY", "delay", "waitUntil", "waitForNavigation", "url", "value", "key", "ms", "script", "mode", "expected", "ref", "selector", "text", "semantic"]) {
       expect(props[p], `act schema 应包含参数 ${p}`).toBeDefined();
     }
-    // 工具列表完整
-    expect(schemas.map((s: any) => s.function.name)).toEqual(["observe", "act", "diagnose", "eval", "screenshot", "session_log", "close", "stealth_status"]);
+    // 工具列表完整（vision = 成本阶梯 L1 视觉桥，2026-08 新增）
+    expect(schemas.map((s: any) => s.function.name)).toEqual(["observe", "act", "diagnose", "eval", "screenshot", "session_log", "close", "stealth_status", "vision"]);
+    const visionSchema = schemas.find((s: any) => s.function.name === "vision");
+    expect(visionSchema).toBeDefined();
+    for (const vp of ["focus", "fullPage", "savePath"]) {
+      expect(visionSchema.function.parameters.properties[vp], "vision schema 应包含参数 " + vp).toBeDefined();
+    }
   });
 });
 

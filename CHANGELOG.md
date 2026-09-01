@@ -5,6 +5,25 @@
 
 ---
 
+## 最新版本（最高权重）· v1.3.0 — 浏览器视觉桥 Vision Bridge（2026-08-30，特性分支 feat/vision-modlens，未发布）
+
+v1.3.0 给 dsh-OpenLiulan 装上「眼睛」：新增 `vision` 工具，把截图交给视觉引擎转成**纯文本证据**（OCR 全文/布局区域/语义场景/不确定项），纯文本模型无需切换多模态即可「看见」页面。
+
+| 增强点 | 做了什么 |
+| :--- | :--- |
+| 新包 @openliulan/vision | 视觉桥独立 workspace：引擎解析/spawn（`engine.ts`）、opencode 直连回退（`opencode.ts`）、证据格式化（`format.ts`）、成本阶梯策略（`strategy.ts`），10 个单测覆盖 |
+| vision 工具 | MCP/插件双通道注册：参数 `focus`（关注点）/ `fullPage` / `savePath`（截图落盘）；输出含引擎来源、OCR 全文、布局阅读顺序、语义实体、主色调、不确定项与升级路径提示 |
+| 成本阶梯 | L0 纯文本 DOM（observe/extract）→ L1 modlens 视觉引擎（vision）→ L2 模型原生视觉（screenshot）；三条工具描述内置统一策略文本，模型按任务自选 |
+| modlens 集成 | 弱耦合调用 liustack/modlens CLI（MIT）；`MODLENS_CLI_PATH` 环境变量 / `vision.cliPath` 配置；缺失时给出安装指引 |
+| opencode 回退 | 主引擎不可用/供应商欠费时自动直连本机 opencode（`opencode-ai` 解壳、npm .cmd 壳兼容），默认模型 opencode-go/deepseek-v4-flash-vision-exp，可配置模型清单 |
+| 引擎截图加固 | Playwright 截图增加 `animations:disabled + caret:hide`（自动化标准做法），vision 前置截图失败自动重试一次 |
+| 开源归属 | 新增 THIRD_PARTY_NOTICES.md：modlens（MIT 全文）、opencode（Apache-2.0）、playwright（Apache-2.0）；DEPENDENCIES/README/docs 同步标注 |
+| 验证 | 168 单测全绿；沙盒 A1（.sandbox-build）真实浏览器冒烟：L0 observe → L1 vision 端到端产出真实 OCR/语义证据（见 docs/vision.md 证据样例） |
+
+> 部署：本版本在特性分支开发，生产装配（web profile 的 mcp-server file: 链接）**未改动**；上线走沙盒 AB 路线，见 docs/vision.md「沙盒 AB 部署」。
+
+---
+
 ## 最新版本（最高权重）· v1.2.0 — 可安装 DSH 插件包（2026-08-29）
 
 v1.2.0 把 dsh-OpenLiulan 从「源码接入」升级为「一行命令可安装的 **DSH 插件包**」，对标 DSH Plugin Hub 的一键安装体验：

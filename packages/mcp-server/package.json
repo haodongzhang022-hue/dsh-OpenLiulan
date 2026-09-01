@@ -20,11 +20,20 @@
     "@openliulan/diagnosis": "1.0.0",
     "@openliulan/token": "1.0.0",
     "@openliulan/ai-layer": "1.0.0",
-    "@openliulan/stealth": "1.0.0"
+    "@openliulan/stealth": "1.0.0",
+    "@openliulan/vision": "1.0.0"
   },
   "devDependencies": {
     "typescript": "^5.5.0",
     "vitest": "^3.0.0",
     "@types/node": "^20.0.0"
+  },
+  "peerDependencies": {
+    "@liustack/modlens": ">=3.25.0"
+  },
+  "peerDependenciesMeta": {
+    "@liustack/modlens": {
+      "optional": true
+    }
   }
 }

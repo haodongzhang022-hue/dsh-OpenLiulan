@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 
-const INTERNAL = ['mcp-server', 'core', 'engines', 'diagnosis', 'token', 'ai-layer', 'stealth'];
+const INTERNAL = ['mcp-server', 'core', 'engines', 'diagnosis', 'token', 'ai-layer', 'stealth', 'vision'];
 
 /** 把 @openliulan/<pkg> 解析到源码入口，保证被打包内联。 */
 const resolveOpenliulan = {

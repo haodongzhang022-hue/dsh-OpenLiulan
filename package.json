@@ -21,7 +21,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build --workspace=@openliulan/core --workspace=@openliulan/diagnosis --workspace=@openliulan/token --workspace=@openliulan/ai-layer --workspace=@openliulan/stealth --workspace=@openliulan/engines --workspace=@openliulan/scripting --workspace=@openliulan/mcp-server --workspace=@openliulan/viz",
+    "build": "npm run build --workspace=@openliulan/core --workspace=@openliulan/diagnosis --workspace=@openliulan/token --workspace=@openliulan/ai-layer --workspace=@openliulan/stealth --workspace=@openliulan/engines --workspace=@openliulan/scripting --workspace=@openliulan/mcp-server --workspace=@openliulan/vision --workspace=@openliulan/viz",
     "build:plugin": "node scripts/build-plugin.mjs",
     "prepack": "node scripts/build-plugin.mjs",
     "test": "vitest run",

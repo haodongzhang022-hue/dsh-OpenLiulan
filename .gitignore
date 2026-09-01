@@ -10,3 +10,6 @@ coverage/
 forge-debug-report.md
 forge-debug-screenshot.png
 forge-artifacts/
+
+# 沙盒 AB 构建产物（不进入生产 dist，仅本地验证用）
+.sandbox-build/
