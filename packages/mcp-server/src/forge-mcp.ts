@@ -244,7 +244,7 @@ export class ForgeMcp {
             imagePath: target,
             focus,
             cliPath: this.opts.vision?.cliPath,
-            timeoutMs: this.opts.vision?.timeoutMs ?? 180_000,
+            timeoutMs: this.opts.vision?.timeoutMs ?? 240_000,
           });
           let evidenceText = formatVisionEvidence(visionResult, { focus });
           if (!visionResult.ok) {
@@ -256,7 +256,7 @@ export class ForgeMcp {
                 focus,
                 models: this.opts.vision?.opencodeModels,
                 bin: this.opts.vision?.opencodeBin,
-                timeoutMs: this.opts.vision?.timeoutMs ?? 180_000,
+                timeoutMs: this.opts.vision?.timeoutMs ?? 240_000,
               });
               if (fb.ok) {
                 evidenceText = formatVisionEvidence(fb, { focus }) + "\n> 注：本次由 opencode 直连回退完成（modlens 引擎不可用，见 docs/vision.md）。";

@@ -14,12 +14,16 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { normalizeVisionOutput, type VisionResult } from "./engine.js";
 
-/** 视觉回退默认模型清单（按本机实测优先序；用时消耗对应账户配额） */
-export const DEFAULT_OPENCODE_MODELS = [
-  "opencode-go/deepseek-v4-flash-vision-exp", // opencode-go 网关，实测本机可用
-  "github-copilot/claude-haiku-4", // GitHub Copilot 登录（Claude 视觉）
-  "deepseek/deepseek-v4-flash-vision-exp", // DeepSeek 官方视觉（用户自己的 key）
-].map((m) => m.toLowerCase());
+/**
+ * 视觉回退默认模型清单（2026-09-03 本机实测定稿，成本优先）：
+ * - opencode/mimo-v2.5-free：zen 免费池，实测可用且 cost=0（约 2-4 分钟，可接受）
+ * - opencode-go/deepseek-v4-flash：订阅文字版，实测【收不到图片】（模型自行 bash 探测，白耗订阅）→ 不列入默认
+ * - ocgo-free-A/deepseek-v4-flash-free：zen 免费池同名模型，实测 Model is unavailable → 不列入默认
+ * - opencode-go/deepseek-v4-flash-vision-exp：订阅视觉版，实测可用（30-90s）但属「真模型视觉」，默认不启用；
+ *   用户确需时显式配置 vision.opencodeModels（费用自理，属 L2 级别开销）
+ * 规则：L1 默认只走免费/最低成本通道，绝不默认消费用户付费额度。
+ */
+export const DEFAULT_OPENCODE_MODELS = ["opencode/mimo-v2.5-free"].map((m) => m.toLowerCase());
 
 export interface OpenCodeVisionOptions {
   imagePath: string;
@@ -152,7 +156,8 @@ export async function runOpenCodeVision(opts: OpenCodeVisionOptions): Promise<Vi
   }
   const models = (opts.models && opts.models.length ? opts.models : DEFAULT_OPENCODE_MODELS)
     .map((m) => m.toLowerCase());
-  const timeoutMs = opts.timeoutMs ?? 180_000;
+  // 免费池（zen）实测较慢（2-4 分钟），默认超时放宽到 240s
+  const timeoutMs = opts.timeoutMs ?? 240_000;
   for (const model of models) {
     const prompt = buildOpenCodePrompt(opts.focus);
     const res = await new Promise<{ ok: boolean; raw?: string; err?: string }>((resolvePromise) => {
@@ -218,7 +223,13 @@ export async function runOpenCodeVision(opts: OpenCodeVisionOptions): Promise<Vi
     };
     return normalizeVisionOutput(JSON.stringify(root), opts.imagePath);
   }
-  return emptyFail(opts.imagePath, "全部回退模型均不可用（欠费或模型不支持），请检查 opencode 登录与配额。");
+  return emptyFail(
+    opts.imagePath,
+    "全部回退模型均不可用。实测指引：\n" +
+      "  - opencode/mimo-v2.5-free（zen 免费池）通常可用但较慢（2-4 分钟），本次可能排队/超时，可重试；\n" +
+      "  - deepseek 文字版（opencode-go/deepseek-v4-flash）无法接收图片（模型收不到附件，只会空转），不要用文字模型硬看图；\n" +
+      "  - 若确需更强视觉：在插件配置 vision.opencodeModels 显式加入视觉模型（如 opencode-go/deepseek-v4-flash-vision-exp），属「真模型视觉」自担费用，或给 modlens 配 gemini-api 免费 key。"
+  );
 }
 
 function emptyFail(imagePath: string, error: string): VisionResult {

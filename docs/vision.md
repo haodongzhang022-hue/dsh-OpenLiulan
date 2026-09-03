@@ -63,11 +63,17 @@ opencode run <prompt> -m <model> --format json -f <截图.png>
 ```
 
 - 二进制定位：`OPENCODE_BIN` 环境变量 → PATH 上的 `.exe` → npm 全局 `.cmd` 壳自动解壳（`opencode-ai/bin/opencode.exe`）
-- 默认模型清单（按机器实测优先，可配 `vision.opencodeModels` 覆盖）：
-  1. `opencode-go/deepseek-v4-flash-vision-exp`（本机实测可用，成本低）
-  2. `github-copilot/claude-haiku-4`（GitHub Copilot 登录）
-  3. `deepseek/deepseek-v4-flash-vision-exp`（用户自己的 DeepSeek 视觉配额）
-- 欠费/不支持的模型自动跳过，不把用户的付费通道当默认
+- 默认模型清单（2026-09-03 本机实测定稿，成本优先，可配 `vision.opencodeModels` 覆盖）：
+  **`opencode/mimo-v2.5-free`（zen 免费池，唯一默认）** —— 实测可用、`cost=0`、证据完整（约 2-4 分钟，免费池排队所致）
+- 实测结论（为什么只有它）：
+  | 候选 | 结果 |
+  | :-- | :-- |
+  | opencode/mimo-v2.5-free（zen 免费池） | ✅ 可用，cost=0，输出完整 |
+  | opencode-go/deepseek-v4-flash（订阅·文字版） | ❌ **收不到图片**（模型自行 bash 探测空转，白耗订阅配额）——文字模型无法直接看图 |
+  | ocgo-free-A/deepseek-v4-flash-free（zen 免费池） | ❌ Model is unavailable |
+  | deepseek/deepseek-v4-flash（官方 key） | ❌ 401 认证失效 |
+  | opencode-go/deepseek-v4-flash-vision-exp（订阅·视觉版） | ✅ 可用（30-90s）但属「真模型视觉」，默认不启用，用户确需时显式配置 |
+- 规则：L1 默认只走免费/最低成本通道，绝不默认消费用户付费额度；「真用模型的视觉」是 L2 的事，由用户在 `vision.opencodeModels` 显式开启（费用自理）或给 modlens 配 gemini-api 免费 key
 
 ### 3.3 L2 模型原生视觉（最后手段）
 
@@ -98,7 +104,7 @@ node mcp-smoke-ai.mjs
 - `tools/list` 出现 `vision` 工具
 - L0 `observe` 返回 DOM 可交互快照（含 ref）
 - L1 `vision` 返回真实证据：OCR 全文、布局区域阅读顺序、语义实体、主色调（如红 #b02a24 / 绿 #2e8b57）、不确定项
-- modlens 引擎未配置时自动回退 opencode 直连（provider=opencode-cli:opencode-go/deepseek-v4-flash-vision-exp）
+- modlens 引擎未配置时自动回退 opencode 直连（provider=opencode-cli:opencode/mimo-v2.5-free，zen 免费池，cost=0）
 - 前置截图失败自动重试一次（字体缓存/渲染器温机）
 
 ### A2：沙盒 DSH profile 全量验证（待做）
@@ -141,6 +147,7 @@ node mcp-smoke-ai.mjs
 | 回退模型全部不可用 | 各通道欠费/不支持 | `opencode auth list` / `opencode models` 检查，配置 `vision.opencodeModels` |
 | 截图偶发超时（waiting for fonts） | 首次字体缓存/渲染器温机 | 已内置：截图 `animations:disabled` + 失败自动重试 1 次；仍失败检查系统字体服务 |
 | Windows 下 spawn opencode EINVAL | 直接 spawn 了 .cmd 壳 | 已内置解壳（读壳内真实 opencode-ai/bin/opencode.exe）；仍失败用 `OPENCODE_BIN` 显式指定 |
+| 视觉结果为空但模型在跑 | 用了文字模型（deepseek-v4-flash 等），模型收不到图片只会空转 | 用默认 mimo-v2.5-free；确需更强视觉按 3.2 的「真视觉」指引显式配置 |
 
 ## 6. 证据样例（A1 实测节选）
 

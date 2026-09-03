@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseOpenCodeEvents, extractJson } from "../src/opencode.js";
+import { parseOpenCodeEvents, extractJson, DEFAULT_OPENCODE_MODELS } from "../src/opencode.js";
 
 describe("opencode fallback", () => {
   it("解析事件流：收集 text、tokens、error", () => {
@@ -17,6 +17,10 @@ describe("opencode fallback", () => {
     const raw = '{"type":"error","error":{"data":{"message":"Insufficient balance"}}}';
     const ev = parseOpenCodeEvents(raw);
     expect(ev.error).toContain("Insufficient balance");
+  });
+  it("默认清单只含免费模型（成本优先，不含 vision-exp/付费通道）", () => {
+    expect(DEFAULT_OPENCODE_MODELS).toEqual(["opencode/mimo-v2.5-free"]);
+    expect(DEFAULT_OPENCODE_MODELS.join(" ")).not.toContain("vision-exp");
   });
   it("extractJson 容忍前后缀", () => {
     const j = extractJson('prefix {"a": 1} suffix');

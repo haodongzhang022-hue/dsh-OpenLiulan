@@ -61,7 +61,7 @@ dsh plugin --profile web add @openliulan/dsh-openliulan@latest # 旧版本缺陷
 ### 引擎与配置
 
 - **主引擎**：[liustack/modlens](https://github.com/liustack/modlens)（MIT，归属声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)）：`dsh plugin --profile web add liustack/modlens` 安装后自动被发现；供应商配置 `node <modlens>/dist/main.js doctor`。
-- **回退通道**：主引擎缺失/欠费时自动尝试本机 opencode 直连（`opencode run --format json -f <图>`），默认模型 `opencode-go/deepseek-v4-flash-vision-exp`（可配置 `vision.opencodeModels` / `OPENCODE_BIN`）。
+- **回退通道**：主引擎缺失/欠费时自动尝试本机 opencode 直连（`opencode run --format json -f <图>`），默认模型 `opencode/mimo-v2.5-free`（zen 免费池，实测 cost=0）；实测 deepseek 文字版收不到图片，故不列入默认；确需更强视觉时显式配置 `vision.opencodeModels`（费用自理）。
 - **手动指定引擎**：环境变量 `MODLENS_CLI_PATH` 指向 `dist/main.js`，或插件配置 `vision.cliPath`。
 - 详细策略与故障排查见 [docs/vision.md](docs/vision.md)。
 
