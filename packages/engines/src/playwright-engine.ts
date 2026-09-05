@@ -292,6 +292,50 @@ export class PlaywrightEngine implements BrowserEngine {
         return { ok: true, type: "press", summary: `已按键 ${(action as any).key}`, durationMs: Date.now() - t0 };
       }
 
+      case "clickAt": {
+        const a = action;
+        if (a.holdMs && a.holdMs > 0) {
+          // 持续按压：按下 → 按住 holdMs → 抬起（模拟触摸/拖动按住）
+          await this.page.mouse.move(a.x, a.y);
+          await this.page.mouse.down({ button: a.button });
+          await this.page.waitForTimeout(a.holdMs);
+          await this.page.mouse.up({ button: a.button });
+        } else {
+          await this.page.mouse.click(a.x, a.y, {
+            button: a.button,
+            clickCount: a.clickCount,
+          });
+        }
+        return {
+          ok: true,
+          type: "clickAt",
+          summary: `已坐标点击 (${a.x},${a.y})${a.holdMs ? `,按住${a.holdMs}ms` : ""}`,
+          durationMs: Date.now() - t0,
+        };
+      }
+
+      case "keyDown": {
+        await this.page.keyboard.down(action.key);
+        return { ok: true, type: "keyDown", summary: `键按下 ${action.key}`, durationMs: Date.now() - t0 };
+      }
+
+      case "keyUp": {
+        await this.page.keyboard.up(action.key);
+        return { ok: true, type: "keyUp", summary: `键抬起 ${action.key}`, durationMs: Date.now() - t0 };
+      }
+
+      case "keyHold": {
+        await this.page.keyboard.down(action.key);
+        await this.page.waitForTimeout(action.ms);
+        await this.page.keyboard.up(action.key);
+        return {
+          ok: true,
+          type: "keyHold",
+          summary: `键 ${action.key} 按住 ${action.ms}ms`,
+          durationMs: Date.now() - t0,
+        };
+      }
+
       default: {
         const a = action as any;
         return { ok: false, type: a.type, summary: `不支持的 action: ${a.type}`, durationMs: Date.now() - t0 };

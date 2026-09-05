@@ -19,6 +19,10 @@ export const BaseActionSchema = z.object({
     "hover",
     "scroll",
     "press",
+    "clickAt",
+    "keyDown",
+    "keyUp",
+    "keyHold",
     "wait",
     "screenshot",
     "evaluate",
@@ -151,6 +155,42 @@ export const PressActionSchema = BaseActionSchema.extend({
   key: z.string(),
 });
 
+/** 坐标点击动作（无 DOM 锚点 —— Canvas/WebGL 游戏页用像素坐标直接点击） */
+export const ClickAtActionSchema = BaseActionSchema.extend({
+  type: z.literal("clickAt"),
+  /** 视口内像素坐标 x */
+  x: z.number(),
+  /** 视口内像素坐标 y */
+  y: z.number(),
+  /** 鼠标按键 */
+  button: z.enum(["left", "right", "middle"]).default("left"),
+  /** 点击次数 */
+  clickCount: z.number().int().min(1).max(3).default(1),
+  /** 按住时长 ms（>0 时模拟「按下→按住→抬起」的持续按压） */
+  holdMs: z.number().int().min(0).default(0),
+});
+
+/** 键按下动作（keydown，方向移动的按住起点） */
+export const KeyDownActionSchema = BaseActionSchema.extend({
+  type: z.literal("keyDown"),
+  /** 按键（如 'KeyW' / 'ArrowUp' / 'Shift'，Playwright keyboard 取值） */
+  key: z.string(),
+});
+
+/** 键抬起动作（keyup，方向移动的松开终点） */
+export const KeyUpActionSchema = BaseActionSchema.extend({
+  type: z.literal("keyUp"),
+  key: z.string(),
+});
+
+/** 键按住动作（keydown → 按住持续 ms → keyup，一次完成 WASD 方向的短促移动） */
+export const KeyHoldActionSchema = BaseActionSchema.extend({
+  type: z.literal("keyHold"),
+  key: z.string(),
+  /** 按住持续 ms */
+  ms: z.number().int().min(1).default(200),
+});
+
 /** 逐键输入动作 */
 export const TypeActionSchema = BaseActionSchema.extend({
   type: z.literal("type"),
@@ -181,6 +221,10 @@ export const UnifiedActionSchema = z.discriminatedUnion("type", [
   WaitActionSchema,
   EvaluateActionSchema,
   PressActionSchema,
+  ClickAtActionSchema,
+  KeyDownActionSchema,
+  KeyUpActionSchema,
+  KeyHoldActionSchema,
   ExtractActionSchema,
   AssertActionSchema,
   ScreenshotActionSchema,
