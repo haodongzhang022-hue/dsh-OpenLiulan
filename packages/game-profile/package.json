@@ -1,0 +1,21 @@
+{
+  "name": "@openliulan/game-profile",
+  "version": "1.0.0",
+  "description": "游戏能力画像沉淀域模块：把 Canvas/WebGL 游戏页的坐标点击与按键按住控制流沉淀为可复用画像（ISSUE #29）",
+  "type": "module",
+  "main": "dist/index.js",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@openliulan/core": "1.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "vitest": "^3.0.0"
+  }
+}
