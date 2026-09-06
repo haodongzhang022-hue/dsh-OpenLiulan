@@ -335,12 +335,12 @@ export class ForgeMcp {
           const sess = await g.session(projectKey);
           const profile = sess?.profile;
           const lines = [
-            `画像 ${projectKey} 落库完成：本次落库 ${r.settled} 条，剩余待落库草稿 ${r.total} 条。`,
+            `画像 ${projectKey} 落库完成：本次落库 ${r.settled} 条，剩余待落库草稿 ${r.remaining} 条。`,
             profile
               ? `画像能力累计：${profile.anchors.length} 坐标锚点, ${profile.keyMap.length} 按键映射, ${profile.reuseCount} 次复用收益。`
               : "",
           ];
-          result = okResult(lines.filter(Boolean).join("\n"), { settled: r.settled, remaining: r.total });
+          result = okResult(lines.filter(Boolean).join("\n"), { settled: r.settled, remaining: r.remaining });
           this.logger.log({ category: "system", message: `game_settle ${projectKey}: +${r.settled}` });
           break;
         }
@@ -416,16 +416,22 @@ export class ForgeMcp {
           const b = await this.ensureBrowser();
           const acts = expandSemanticActions(semantic as never);
           const parts: string[] = [];
+          let allOk = true;
           for (const a of acts) {
             const ar = await b.act(a as never);
             parts.push(ar.ok ? `✓ ${ar.summary}` : `✗ ${ar.summary}`);
-            if (!ar.ok) break;
+            if (!ar.ok) { allOk = false; break; }
           }
-          // 成功后计入画像复用收益
-          await g.markReuse(projectKey);
           const lines = [`画像 ${projectKey} ${kind} 执行完成：`, ...parts];
-          result = okResult(lines.join("\n"), { executed: acts.length });
-          this.logger.action(`game_act ${projectKey} ${kind} 成功: ${sess.profile.reuseCount} 次复用`);
+          if (allOk) {
+            // 仅全部动作成功才计入画像复用收益
+            await g.markReuse(projectKey);
+            result = okResult(lines.join("\n"), { executed: acts.length });
+            this.logger.action(`game_act ${projectKey} ${kind} 成功: ${sess.profile.reuseCount} 次复用`);
+          } else {
+            result = errResult(lines.join("\n"));
+            this.logger.log({ level: "warning", category: "action", message: `game_act ${projectKey} ${kind} 执行中断：第 ${parts.length} 步失败，未计入复用收益` });
+          }
           break;
         }
 
@@ -446,7 +452,7 @@ export class ForgeMcp {
         }
 
         default:
-          result = errResult(`未知工具: ${name}。可用工具: ${TOOLS.map((t) => t.name).join(", ")}`);
+          result = errResult(`未知工具: ${name}。可用工具: ${[...TOOLS, ...GAME_TOOLS].map((t) => t.name).join(", ")}`);
       }
 
       // 把本次调用的最新事件注入返回结果，让外部 AI 拿到"发生了什么 + 为什么 + 图 + 日志"

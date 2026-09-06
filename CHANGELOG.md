@@ -16,7 +16,7 @@ v1.6.0 落地 ISSUE #29 的收尾 S4「画像级调度 + MCP 接入」，把 S1.
 | 画像级调度控制器 | `game-profile` 新增 `GameProfileDirector`：每游戏项目绑定一条隔离会话（画像+录制器+状态树同柄），端口名规范化（projectKey→slug 连字符），会话按活跃度可回收防堆积 |
 | 沉淀工作流 | 一条可持续沉淀闭环：`feed` 喂真实动作 → 达阈值静默进「待落库草稿」→ `settle` 确认落库成画像能力 → `markReuse` 累计复用收益；跨会话 JSON 留存，新进程也能还原同端口会话 |
 | 状态树驱动 | `planToGoal` 沿画像状态树规划到目标态的动作序列，供上层按序驱动真实游戏页 |
-| MCP 游戏工具 | `mcp-server` 扩展 `game_bind` / `game_record` / `game_settle` / `game_plan` / `game_act` / `game_list` 六枚工具，本地 AI 可直接经 MCP 按项目端口沉淀与驱动游戏控制流 |
+| MCP 游戏工具 | `mcp-server` 扩展 `game_bind` / `game_record` / `game_settle` / `game_transition` / `game_plan` / `game_act` / `game_list` 七枚工具，本地 AI 可直接经 MCP 按项目端口沉淀与驱动游戏控制流 |
 | 真实引擎执行 | `game_act` 把画像语义动作经 `expandSemanticActions` 展开喂给真实浏览器引擎执行，成功后自动计入画像复用收益 |
 
 **本次为 ISSUE #29 的框架侧收尾落点**，补齐 MCP 接入与每画像调度；`game_act` 的真实浏览器驱动归入 browser-smoke CI 验收。仍严守阶段边界护栏：不做帧同步校验/实时战斗验证/多 Agent 并发游戏操作。

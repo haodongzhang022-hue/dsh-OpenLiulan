@@ -172,7 +172,7 @@ export class GameProfileDirector {
   }
 
   /** 将某项目会话的**指定待落库草稿**落库进画像（确认沉淀）。index=-1 表示全量落库。 */
-  async settle(projectKey: string, index = -1): Promise<{ settled: number; total: number }> {
+  async settle(projectKey: string, index = -1): Promise<{ settled: number; remaining: number }> {
     const s = await this.session(projectKey);
     if (!s) throw new Error(`画像 ${projectKey} 未绑定，请先 bind`);
     const profile = s.profile;
@@ -195,7 +195,7 @@ export class GameProfileDirector {
     const keep = s.pendingDrafts.filter((d) => !list.includes(d));
     s.pendingDrafts.length = 0;
     s.pendingDrafts.push(...keep);
-    return { settled, total: keep.length };
+    return { settled, remaining: keep.length };
   }
 
   /** 沿某项目状态树规划到首个目标态的语义动作序列（供上层驱动回放） */
