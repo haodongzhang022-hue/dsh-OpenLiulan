@@ -10,6 +10,33 @@ import { DiagnosisCenter } from "@openliulan/diagnosis";
 import { compactSnapshot } from "@openliulan/token";
 import type { StealthOptions } from "@openliulan/stealth";
 import { TOOLS, okResult, errResult, type ToolResult, type McpToolSchema } from "./tools.js";
+import { GAME_TOOLS } from "./game-tools.js";
+import {
+  GameProfileDirector,
+  JsonProfileStore,
+  JsonStateTreeStore,
+  expandSemanticActions,
+  type SemanticAction,
+} from "@openliulan/game-profile";
+import os from "node:os";
+import path from "node:path";
+
+/** 缺省游戏画像存储目录（临时目录，跨会话留存但系统可清理） */
+function defaultGameStoreDir(): string {
+  return path.join(os.tmpdir(), "forge-game-profiles");
+}
+
+
+/** 把画像语义动作转成人类可读的一行 */
+function actionHuman(st: SemanticAction): string {
+  if (typeof st !== "object" || st === null) return String(st);
+  const o = st as Record<string, unknown>;
+  if (o.kind === "key") return `按键 ${o.key}${o.ms ? `（按住${o.ms}ms）` : ""}`;
+  if (o.kind === "clickAt") return `点击坐标 (${o.x},${o.y})`;
+  if (o.kind === "seq") return `复合序列(${(o.steps as unknown[])?.length ?? 0}步)`;
+  return "画像动作";
+}
+
 import { SessionLogger } from "./logger.js";
 import { buildAIMessage, messageToContent, type AIMessage } from "./message.js";
 import type { ForgeAnyEvent } from "./events.js";
@@ -26,17 +53,34 @@ export interface ForgeMcpOptions {
   maxEvents?: number;
   /** 防检测配置（可选，默认关闭） */
   stealth?: StealthOptions;
+  /** 游戏画像持久化目录（JSON 落盘，跨会话留存）。缺省用系统临时目录下的 forge-game-profiles */
+  gameStoreDir?: string;
 }
 
 export class ForgeMcp {
-  readonly tools: McpToolSchema[] = TOOLS;
+  readonly tools: McpToolSchema[] = [...TOOLS, ...GAME_TOOLS];
   /** 会话事件日志器 —— 供外部 AI / IDE 订阅和拉取事件流 */
   readonly logger: SessionLogger;
   private browser?: ForgeBrowser;
   private diagnosis?: DiagnosisCenter;
+  /** 画像级调度控制器（每项目一端口），按需惰性创建 */
+  private game?: GameProfileDirector;
+  private gameDir: string;
 
   constructor(private opts: ForgeMcpOptions = {}) {
     this.logger = opts.logger ?? new SessionLogger({ maxEvents: opts.maxEvents });
+    this.gameDir = opts.gameStoreDir ?? defaultGameStoreDir();
+  }
+
+  /** 惰性获取画像调度控制器（跨会话 JSON 落盘） */
+  private ensureGame(): GameProfileDirector {
+    if (!this.game) {
+      this.game = new GameProfileDirector({
+        profileStore: new JsonProfileStore(path.join(this.gameDir, "profiles")),
+        stateTreeStore: new JsonStateTreeStore(path.join(this.gameDir, "trees")),
+      });
+    }
+    return this.game;
   }
 
   /** 生命周期：确保浏览器已就绪 */
@@ -232,6 +276,172 @@ export class ForgeMcp {
           ];
           result = okResult(lines.join("\n"), { enabled, level, ua });
           this.logger.log({ category: "system", message: `查询 stealth 状态: ${enabled ? "enabled" : "disabled"}` });
+          break;
+        }
+
+
+        case "game_bind": {
+          const g = this.ensureGame();
+          const projectKey = String(args.projectKey);
+          const sess = await g.bind({
+            projectKey,
+            name: args.name ? String(args.name) : projectKey,
+            sourceUrl: String(args.sourceUrl),
+            viewport: { width: Number(args.width ?? 1280), height: Number(args.height ?? 720) },
+          });
+          const isNew = sess.profile.createdAt === sess.profile.updatedAt;
+          const lines = [
+            `画像已${isNew ? "新建" : "复用"}：${sess.profile.name}`,
+            `- 项目 key: ${projectKey}`,
+            `- 端口: ${sess.port}`,
+            `- 页面: ${sess.profile.pageKey}`,
+            `- 已沉淀: ${sess.profile.anchors.length} 坐标锚点, ${sess.profile.keyMap.length} 按键映射, ${sess.profile.stateDetectors.length} 关键态`,
+          ];
+          result = okResult(lines.join("\n"), {
+            projectKey,
+            port: sess.port,
+            created: isNew,
+            profile: sess.profile,
+          });
+          this.logger.log({ category: "system", message: `game_bind ${projectKey} (${sess.port})` });
+          break;
+        }
+
+        case "game_record": {
+          const g = this.ensureGame();
+          const projectKey = String(args.projectKey);
+          const t = String(args.type);
+          const act =
+            t === "clickAt"
+              ? { type: "clickAt", x: Number(args.x), y: Number(args.y), description: args.desc ? String(args.desc) : undefined }
+              : { type: t === "keyDown" ? "keyDown" : "keyHold", key: String(args.key), ms: args.ms ? Number(args.ms) : undefined };
+          const out = await g.feed(projectKey, act as never);
+          const lines = [
+            `动作已喂给画像 ${projectKey} 录制器。`,
+            out.newDraft
+              ? `⚠ 该能力项已达沉淀阈值，进入待落库草稿（共 ${out.pendingCount} 条）。用 game_settle 确认落库。`
+              : `当前待落库草稿 ${out.pendingCount} 条。`,
+          ];
+          result = okResult(lines.join("\n"), { newDraft: out.newDraft, pendingCount: out.pendingCount });
+          this.logger.log({ category: "action", message: `game_record ${projectKey} ${t}${out.newDraft ? " (进入草稿)" : ""}` });
+          break;
+        }
+
+        case "game_settle": {
+          const g = this.ensureGame();
+          const projectKey = String(args.projectKey);
+          const index = args.index === undefined ? -1 : Number(args.index);
+          const r = await g.settle(projectKey, index);
+          const sess = await g.session(projectKey);
+          const profile = sess?.profile;
+          const lines = [
+            `画像 ${projectKey} 落库完成：本次落库 ${r.settled} 条，剩余待落库草稿 ${r.total} 条。`,
+            profile
+              ? `画像能力累计：${profile.anchors.length} 坐标锚点, ${profile.keyMap.length} 按键映射, ${profile.reuseCount} 次复用收益。`
+              : "",
+          ];
+          result = okResult(lines.filter(Boolean).join("\n"), { settled: r.settled, remaining: r.total });
+          this.logger.log({ category: "system", message: `game_settle ${projectKey}: +${r.settled}` });
+          break;
+        }
+
+        case "game_transition": {
+          const g = this.ensureGame();
+          const projectKey = String(args.projectKey);
+          const a = (args.action ?? {}) as Record<string, unknown>;
+          const kind = String(a.kind ?? "key");
+          let semantic;
+          if (kind === "clickAt") semantic = { kind: "clickAt", x: Number(a.x), y: Number(a.y) };
+          else if (kind === "seq") semantic = { kind: "seq", steps: Array.isArray(a.steps) ? a.steps : [] };
+          else semantic = { kind: "key", key: String(a.key), ms: a.ms ? Number(a.ms) : undefined };
+          // 由 detector 参数构造关键态判定（pixel 图色 / url 片段）
+          const dk = args.detectorKind ? String(args.detectorKind) : "url";
+          const detector =
+            dk === "pixel"
+              ? {
+                  name: String(args.detectorName),
+                  detect: { kind: "pixel" as const, x: Number(args.x), y: Number(args.y), rgb: [Number(args.r ?? 0), Number(args.g ?? 0), Number(args.b ?? 0)] as [number, number, number] },
+                }
+              : {
+                  name: String(args.detectorName),
+                  detect: { kind: "url" as const, fragment: String(args.fragment ?? "") },
+                };
+          const t = await g.registerTransition({
+            projectKey,
+            fromNodeId: args.fromNodeId ? String(args.fromNodeId) : undefined,
+            action: semantic as never,
+            label: args.label ? String(args.label) : String(args.detectorName),
+            detectorName: String(args.detectorName),
+            detector,
+          });
+          const lines = [`已登记状态转移 ${t.from} --(${String(args.label ?? args.detectorName)})--> ${t.to}。`, "用 game_plan 可沿树规划到目标态。"];
+          result = okResult(lines.join("\n"), { from: t.from, to: t.to });
+          this.logger.log({ category: "system", message: `game_transition ${projectKey}: ${t.from}->${t.to}` });
+          break;
+        }
+
+        case "game_plan": {
+          const g = this.ensureGame();
+          const projectKey = String(args.projectKey);
+          const pth = await g.planToGoal(projectKey);
+          if (!pth) {
+            result = okResult(`画像 ${projectKey} 状态树尚无到目标态的路径。请先用 game_record + game_settle 沉淀，或实测登记状态转移。`, { hasPath: false });
+          } else {
+            const steps = pth.steps;
+            const lines = [
+              `沿状态树到目标态 ${pth.goalNodeId}（${steps.length} 步）：`,
+              ...steps.map((st, i) => {
+                const act = expandSemanticActions(st);
+                return `${i + 1}. ${actionHuman(st)}  → ${act.length} 个可执行动作`;
+              }),
+              "提示：用 game_act 按序执行这些动作即可推进到目标态，重复探索无需重新定位。",
+            ];
+            result = okResult(lines.join("\n"), { goalNodeId: pth.goalNodeId, steps: pth.steps });
+          }
+          this.logger.log({ category: "action", message: `game_plan ${projectKey}: ${pth ? pth.steps.length : "no path"}` });
+          break;
+        }
+
+        case "game_act": {
+          const g = this.ensureGame();
+          const projectKey = String(args.projectKey);
+          const sess = await g.session(projectKey);
+          if (!sess) throw new Error(`画像 ${projectKey} 未绑定，请先 game_bind`);
+          const kind = String(args.kind);
+          let semantic;
+          if (kind === "key") semantic = { kind: "key", key: String(args.key), ms: args.ms ? Number(args.ms) : 150 };
+          else if (kind === "clickAt") semantic = { kind: "clickAt", x: Number(args.x), y: Number(args.y) };
+          else throw new Error(`kind 需为 key 或 clickAt`);
+          // 执行真实浏览器动作（画像语义 → 引擎可执行动作）
+          const b = await this.ensureBrowser();
+          const acts = expandSemanticActions(semantic as never);
+          const parts: string[] = [];
+          for (const a of acts) {
+            const ar = await b.act(a as never);
+            parts.push(ar.ok ? `✓ ${ar.summary}` : `✗ ${ar.summary}`);
+            if (!ar.ok) break;
+          }
+          // 成功后计入画像复用收益
+          await g.markReuse(projectKey);
+          const lines = [`画像 ${projectKey} ${kind} 执行完成：`, ...parts];
+          result = okResult(lines.join("\n"), { executed: acts.length });
+          this.logger.action(`game_act ${projectKey} ${kind} 成功: ${sess.profile.reuseCount} 次复用`);
+          break;
+        }
+
+        case "game_list": {
+          const g = this.ensureGame();
+          const list = await g.list();
+          if (list.length === 0) {
+            result = okResult("尚无沉淀的游戏画像。用 game_bind 绑定一个游戏项目开始沉淀。", { profiles: [] });
+          } else {
+            const lines = [`共 ${list.length} 个游戏画像资产：`];
+            for (const l of list) {
+              lines.push(`- ${l.name} (${l.projectKey}) [端口 ${l.port}] 复用 ${l.reuseCount} 次${l.draftCount ? `, 待落库 ${l.draftCount} 条` : ""}`);
+            }
+            result = okResult(lines.join("\n"), { profiles: list });
+          }
+          this.logger.log({ category: "system", message: `game_list: ${list.length} profiles` });
           break;
         }
 

@@ -2,10 +2,12 @@
  * @openliulan/game-profile —— 游戏能力画像沉淀域模块（ISSUE #29 S2 + S3）
  *
  * 把 Canvas/WebGL 游戏页的「坐标点击 + 按键按住」控制流沉淀为可复用画像，
- * 再把画像能力固化为「角色状态树」，支撑一次成型、可导航的探索复用：
+ * 再把画像能力固化为「角色状态树」，并收敛为按项目隔离的可调度会话：
  * - S2：每游戏项目一份画像（GameProfile），可映射一个 MCP 端口；
  * - S3：AgentStateTree 角色状态树，根=起始画面、边=画像语义动作、叶=目标态，
- *       本地 AI 沿树从根走到叶，重复探索无需重新定位。
+ *       本地 AI 沿树从根走到叶，重复探索无需重新定位；
+ * - S4：GameProfileDirector 画像级调度控制器——每项目一「端口/连接」句柄，
+ *       把画像+录制器+状态树绑定到同一隔离会话，本地 AI 按项目端口直接驱动沉淀。
  *
  * 分层归属：画像/状态树只存表现层契约（坐标/按键/关键态判定），跨引擎复用。
  */
@@ -57,3 +59,4 @@ export function createProfile(options: {
 /** 便捷类型引用：一棵可回放的画像状态树 */
 export type { AgentStateTree };
 export * from "./agent.js";
+export * from "./director.js";
