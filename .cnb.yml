@@ -48,3 +48,13 @@
             # 单测 + 真实浏览器验收（防止假装测试：
             # 必须真实控制浏览器并断言真实 DOM 状态）
             npm run test
+    - name: ai-code-review
+      stages:
+        - name: 代码评审
+          image: cnbcool/code-review:latest
+          settings:
+            context: 10
+            comment: true
+            max_comments: 10
+            min_severity: warning
+            fail_on_critical: false

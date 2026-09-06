@@ -13,6 +13,13 @@
 | `screenshot` | 截图（base64，写入图片事件供多模态 AI） | 高（按需） |
 | `session_log` | 会话事件日志流（动作/诊断/错误/截图轨迹，AI 协作追踪） | 中 |
 | `close` | 关闭浏览器 | - |
+| `game_bind` | 绑定/复用某游戏项目画像会话（每项目一端口，ISSUE #29） | 低 |
+| `game_record` | 喂真实坐标/按键动作进画像录制器（达阈值进待落库草稿） | 低 |
+| `game_settle` | 确认把待落库草稿落库成画像能力（沉淀确认） | 低 |
+| `game_transition` | 登记实测「动作 → 关键态」转移到画像状态树 | 低 |
+| `game_plan` | 沿画像状态树规划到目标态的动作序列（回放驱动） | 低 |
+| `game_act` | 按画像语义动作驱动真实浏览器（含视口漂移校验） | 中 |
+| `game_list` | 列出已沉淀游戏画像资产（复用计数/端口） | 低 |
 
 > 完整的 AI 协作消息传递 / 日志 / 图片 / 错误传递协议见
 > **[docs/ai-collaboration.md](./ai-collaboration.md)**。
@@ -41,7 +48,7 @@ const tools = toHarnessTools(mcp);
 
 适配**不依赖 harness 具体版本号**，而是基于两条**协议无关**的标准通道，天然兼容 deepseek harness 当前及后续版本（含 r7）：
 
-1. **标准 MCP stdio 服务**（推荐，供 `@deepseek-ai/dsh-mcp-client` 使用）：`forge-mcp --stdio` 暴露标准 `initialize / tools/list / tools/call`，工具定义完整规范（observe / act / diagnose / eval / screenshot / session_log / close / stealth_status），客户端无需针对版本适配即可发现并调用全部工具；
+1. **标准 MCP stdio 服务**（推荐，供 `@deepseek-ai/dsh-mcp-client` 使用）：`forge-mcp --stdio` 暴露标准 `initialize / tools/list / tools/call`，工具定义完整规范（observe / act / diagnose / eval / screenshot / session_log / close / stealth_status / game_bind / game_record / game_settle / game_transition / game_plan / game_act / game_list），客户端无需针对版本适配即可发现并调用全部工具；
 2. **OpenAI 兼容 function calling schema**（供直接注入 tool_loop）：`buildHarnessFunctionSchemas` 输出标准 `{type:"function",function:{name,description,parameters}}`，r7 的原生 function-calling / 多步思考可直接消费。
 
 > 针对 r7 强化的「原生 tool_loop + thinking + 多步规划」，Forge 另提供自愈 `runAgentLoop`（见下节），把 harness 的规划能力与 Forge 的 5 星诊断闭环成自动化排障代理，做到「不是能用，而是增强」。

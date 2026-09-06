@@ -8,6 +8,7 @@
  *   forge-mcp --stealth true     # 启用防检测（Stealth）模式
  *   forge-mcp --stealth-level full  # 防检测级别（basic/full）
  *   forge-mcp --stealth-ua <ua>  # 自定义 User-Agent
+ *   forge-mcp --game-store <dir> # 游戏画像持久化目录（每项目一端口沉淀资产）
  *   forge-mcp --ci-spec <json>   # CNB CI/Pipeline 冒烟检查（在云端构建机执行）
  */
 import { ForgeMcp } from "./forge-mcp.js";
@@ -38,6 +39,7 @@ const args = parseArgs(process.argv.slice(2));
 const mcp = new ForgeMcp({
   headless: args.headless !== "false",
   connectUrl: args.connect,
+  gameStoreDir: args["game-store"],
   stealth: {
     enabled: args.stealth === "true" || args.stealth === "1",
     level: (args["stealth-level"] as any) ?? "basic",
