@@ -285,7 +285,7 @@ export class PlaywrightEngine implements BrowserEngine {
       }
 
       case "evaluate": {
-        const result = await this.page.evaluate((action as any).script as string);
+        const result = await this.runScript((action as any).script as string);
         return { ok: true, type: "evaluate", summary: "JS 执行完成", data: result, durationMs: Date.now() - t0 };
       }
 
@@ -330,7 +330,37 @@ export class PlaywrightEngine implements BrowserEngine {
     return this.diagnostics!.network.collect();
   }
 
+  /** 注入执行 JS：字符串按表达式或函数体两种写法均可用。 */
   async evaluate(script: string): Promise<unknown> {
-    return this.page!.evaluate(script);
+    return this.runScript(script);
   }
+
+  /**
+   * 执行注入脚本。
+   *
+   * Playwright 把字符串参数按「表达式」解析，顶层出现 `return` 的脚本会抛
+   * `SyntaxError: Illegal return statement`。此处表达式写法优先，命中该错误时按函数体重试一次，
+   * 使函数体写法（多语句 + return）无需调用方自己包 IIFE。
+   */
+  private async runScript(script: string): Promise<unknown> {
+    try {
+      return await this.page!.evaluate(script);
+    } catch (error) {
+      if (!isExpressionOnlySyntax(error)) throw error;
+      try {
+        return await this.page!.evaluate(`(async () => { ${script} })()`);
+      } catch {
+        // 函数体写法同样解析失败：调用方写法本身有语法错，抛原始解析错误更有指向性。
+        throw error;
+      }
+    }
+  }
+}
+
+/** Playwright 按表达式解析字符串时，只在函数体内合法的语法错误。 */
+const EXPRESSION_ONLY_SYNTAX = ["Illegal return statement", "await is only valid in async functions"];
+
+/** 判定字符串脚本属于「只能是函数体」的解析错误：顶层 `return` 或顶层 `await`。 */
+function isExpressionOnlySyntax(error: unknown): boolean {
+  return error instanceof Error && EXPRESSION_ONLY_SYNTAX.some((phrase) => error.message.includes(phrase));
 }
