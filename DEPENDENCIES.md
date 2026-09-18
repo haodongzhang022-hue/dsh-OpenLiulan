@@ -65,11 +65,13 @@ npx playwright install chromium
 ## 实测验证版本
 
 ```text
-Node.js:   v22.20.0
+Node.js:   v22.20.0（DSH 双版本验收在 v24.21.0 上亦通过）
 TypeScript: 5.5.x
 Vitest:     3.2.7
 Playwright: 1.62.1
 Chromium:   Playwright Chromium v1234
+DSH 旧版线:  @deepseek-ai/dsh-tools 0.1.1-rc.2 + cordis 4.0.1
+DSH 新版线:  @deepseek-ai/dsh-tools 0.1.6-alpha.2 + cordis 4.0.2
 ```
 
 ## 常见问题
@@ -81,6 +83,31 @@ Chromium:   Playwright Chromium v1234
 
 ## DeepSeek Harness 集成
 
-集成 DSH 需要 `@deepseek-ai/dsh-mcp-client`、已构建的 `@openliulan/mcp-server`、
-可访问的 Node.js 与 Playwright Chromium。完整 Harness 配置示例见
-[docs/dependencies.md](docs/dependencies.md#5-deepseek-harness-集成额外依赖)。
+DSH 有两条接入通道，按下表选一：
+
+| 通道 | 需要什么 | 适用场景 |
+| :--- | :--- | :--- |
+| **进程内插件（推荐）** | 只要 DSH 本身，无需额外依赖 | 本地/云端 dsh web profile，一条命令装当前全部 `browser_*` 工具 |
+| MCP 客户端 | `@deepseek-ai/dsh-mcp-client` + 已构建的 `@openliulan/mcp-server` | 需要 stdio/HTTP 分离部署或跨进程隔离 |
+
+### 插件通道的宿主兼容性
+
+插件**不内联任何 `@deepseek-ai/*` 运行时符号**，只依赖宿主注入的 `ctx.tools`，
+因此同一份 `lib/index.js` 可同时装在两条 DSH 版本线上：
+
+| DSH 版本线 | `@deepseek-ai/dsh-tools` | `mode` 取值 | 适配状态 |
+| :--- | :--- | :--- | :--- |
+| 旧版（Code mode） | `0.1.1` 线（本仓库 devDependency 钉 `^0.1.1-rc.2`） | `native \| code \| both` | ✅ 实测通过 |
+| 新版（PTC mode） | `0.1.6` 线（CI 钉 `0.1.6-alpha.2`） | `native \| ptc \| both` | ✅ 实测通过 |
+
+`@deepseek-ai/cordis` 仅作类型时使用（本仓库已改为本地结构化声明，构建时被擦除）；
+`peerDependencies` 声明 `^4.0.1`，两版宿主（`4.0.1` / `4.0.2`）均满足。
+
+自检命令：
+
+```bash
+npm run test:plugin        # 假 ctx 冒烟，无需装 DSH
+npm run test:dsh-compat    # 真实宿主双版本验收（隔离临时目录各自安装）
+```
+
+完整 Harness 配置示例见 [docs/dependencies.md](docs/dependencies.md#5-deepseek-harness-集成额外依赖)。
