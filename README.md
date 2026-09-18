@@ -17,7 +17,50 @@
 ## 📦 DSH 插件：一条命令安装与升级
 
 自 **v1.2.0（2026-08-29）** 起，dsh-OpenLiulan 打包为**可安装的 DSH 插件包**（`@openliulan/dsh-openliulan`）：
-它声明 `dsh.bundle.patch` 指向 `cordis.patch.yml`，把进程内 Forge 浏览器工具（`browser_observe` / `browser_act` / `browser_diagnose` / `browser_eval` / `browser_screenshot` / `browser_session_log` / `browser_close` / `browser_stealth_status`）一条命令装进 **dsh web profile**，装完重启 dsh web 即生效——无需手改配置、无需额外装 MCP。
+它声明 `dsh.bundle.patch` 指向 `cordis.patch.yml`，把进程内 Forge 工具一条命令装进 **dsh web profile**，
+装完重启 dsh web 即生效——无需手改配置、无需额外装 MCP。
+
+自 **v1.7.0（2026-09-18）** 起，插件**同时适配 DSH 新旧两版**，并补齐为 **15 枚工具**：
+
+| 分类 | 工具 |
+| :--- | :--- |
+| 浏览器控制（8） | `browser_observe` / `browser_act` / `browser_diagnose` / `browser_eval` / `browser_screenshot` / `browser_session_log` / `browser_close` / `browser_stealth_status` |
+| 游戏画像级控制（7，ISSUE #29） | `browser_game_bind` / `browser_game_record` / `browser_game_settle` / `browser_game_transition` / `browser_game_plan` / `browser_game_act` / `browser_game_list` |
+
+### DSH 版本兼容性（实测）
+
+DSH 已从 **Code mode 线（`@deepseek-ai/dsh-tools` `0.1.1` 线）** 演进到 **PTC mode 线（`0.1.6` 线）**：
+`mode` 取值由 `native|code|both` 变为 `native|ptc|both`，`tool/code-dispatch` 事件改名为 `tool/ptc-dispatch`，
+Code Mode 运行时 `ctx.codeRuntime` 变为 PTC 运行时 `ctx.ptcRuntime`。
+
+**同一份 `lib/index.js` 两版都能装**——产物不内联任何 `@deepseek-ai/*` 宿主包（构建期强制体检），
+插件只依赖宿主注入的 `ctx.tools`，并在加载时探测版本线：
+
+| DSH 版本线 | 实测结果 |
+| :--- | :--- |
+| 旧版（Code mode 线） | `flavor=legacy` · `tools=15` · 适配验收通过 |
+| 新版（PTC mode 线） | `flavor=modern` · `tools=15` · 适配验收通过 |
+
+新版的三条硬约束与对应处置：
+
+| 新版约束 | 处置 |
+| :--- | :--- |
+| `run_code` 是保留工具名，`register()` 直接抛错 | 注册前 `assertNotReserved()` 显式失败并指明 prefix 冲突 |
+| `output.schema` 受强制 JSON Schema 子集校验 | 统一走 `normalizeSchema()` 压平为受支持子集，注册期 `validateAgainstSchema()` 自检 |
+| `execute(args, exec)` 必须尊重 `exec.signal` | 双参签名显式 `throwIfAborted()`，取消后不触达工具体 |
+
+自检命令（无需真的装 DSH）：
+
+```bash
+npm run test:plugin        # 假 ctx 冒烟：15 枚工具 + schema + 取消语义 + 产物不内联宿主包
+npm run test:dsh-compat    # 真实宿主双版本验收：装真实 cordis+ToolRuntime 跑 legacy 与 modern
+```
+
+> 完整的版本线差异对照、硬约束清单与验收细节见 [`docs/dsh-compat.md`](docs/dsh-compat.md)。
+>
+> CI（`.cnb.yml`）已在 `main` 与 `pull_request` 上各挂一条 `dsh-compat` 任务：
+> 在隔离临时目录分别安装旧版与新版真实宿主，用真 `ToolRuntime` 装配 `lib/index.js`
+> 验收注册清单、版本线、schema 子集、dispatch 全链路与取消语义，失败即 CI 红。
 
 ### 一键安装（三种通道，任选其一）
 

@@ -7,6 +7,45 @@
 
 ---
 
+## 最新版本（最高权重）· v1.7.0 — DSH 新版适配：PTC 时代插件规则对齐 + 双版本兼容（ISSUE #33，2026-09-18）
+
+v1.7.0 完成 ISSUE #33「适配 dsh 新版」：DSH 已从 **Code mode 线（`dsh-tools` `0.1.1-rc.2`）** 演进到
+**PTC mode 线（`0.1.6-alpha.2`）**，工具注册契约随之变化。本版把插件从「只在旧版能装」升级为
+**一份产物同时适配新旧两版**，并用真实宿主的 `ToolRuntime` 把每一条硬约束固化成测试。
+
+| 增强点 | 做了什么 |
+| :--- | :--- |
+| 版本线探测 | 不导入任何 `@deepseek-ai/dsh-tools` 符号，改用 `ctx.tools.constructor.Config` 的公开投影判定版本线：`mode` 取值含 `ptc` → 新版（modern），含 `code` → 旧版（legacy），无法判定时按兼容路径注册并如实报 `unknown` |
+| 保留名护栏 | 新增 `assertNotReserved()`：新版把 Code Mode 改名 PTC mode，但 `run_code` 仍是保留的 presentation transport，宿主 `register()` 对其直接抛错；插件提前显式失败，让用户看到「prefix 选得不对」而不是宿主内部错误 |
+| schema 规范化 | 新增 `src/dsh-schema.ts`：把 MCP 侧宽松 `inputSchema` 压平为 DSH 强制的受支持 JSON Schema 子集（白名单 keyword、`oneOf` 与 `type` 互斥、`required` 必须落在 `properties` 内、`additionalProperties` 显式布尔位），并提供同构的 `validateAgainstSchema` 供注册期自检 |
+| `output.schema` 自检 | 注册前对 15 枚工具逐一校验 canonical value 契约，结果写入「加载画像」；`schema` 违规不再表现为「装上了但调用即炸」 |
+| `exec.signal` 取消语义 | `execute(args, exec)` 双参签名显式处理 `exec?.signal`：已中止立刻抛出，长任务不再无视宿主取消（新版明确要求异步工具 observe/forward 取消信号） |
+| 工具清单补齐 | 插件此前只注册 8 枚浏览器工具，`game_*` 7 枚（ISSUE #29 画像级控制）留在 MCP 侧未进进程内插件；本版补齐为 **15 枚全部注册** |
+| 跨版本产物 | `scripts/build-plugin.mjs` 增加**产物体检**：若 `lib/index.js` 内联了 `@deepseek-ai/dsh-tools` / `@deepseek-ai/cordis` 即构建失败——把「不得钉死 DSH 版本」变成构建期硬约束 |
+| 真实宿主验收 | 新增 `test/plugin-dsh-compat.test.mjs`（7 例）：用真实 cordis + ToolRuntime 装配插件，验收注册清单、版本线、schema 子集、`execute → output.schema → render` 全链路、取消语义、保留名护栏、effect 卸载回收 |
+| 双版本 CI 验收 | 新增 `scripts/dsh-compat-check.mjs`：在**隔离临时目录**各装一份真实宿主，分别跑旧版（`0.1.1-rc.2`）与新版（`0.1.6-alpha.2`）适配验收；`.cnb.yml` 的 `main` 与 `pull_request` 均新增 `dsh-compat` 任务，验收失败即 CI 红 |
+
+**实测结论**（真实宿主，非模拟）：
+
+```text
+legacy 宿主：DSH_COMPAT_OK flavor=legacy tools=15  evidence=tools.Config.mode ~ { mode?: "native" | "code" | "both" }
+modern 宿主：DSH_COMPAT_OK flavor=modern tools=15  evidence=tools.Config.mode ~ { mode?: "native" | "ptc"  | "both" }
+```
+
+**新版适配的三条硬约束与对应处置**：
+
+| 新版约束 | 不处置的后果 | 本版处置 |
+| :--- | :--- | :--- |
+| `run_code` 为保留工具名 | 用户改 prefix 后宿主 `register()` 抛错，报错信息指向宿主内部 | 注册前 `assertNotReserved()` 显式失败 + 指明 prefix 冲突 |
+| `output.schema` 受强制 JSON Schema 子集校验 | 作者侧 `type: 'json'` 等写法被直接拒绝，插件整个加载失败 | 统一走 `normalizeSchema()` 压平；注册期 `validateAgainstSchema()` 自检 |
+| `execute(args, exec)` 必须尊重 `exec.signal` | 长任务无视宿主取消，新版在取消窗口上返回 `ABORTED` 与工具实际行为不一致 | 双参签名显式 `throwIfAborted()`；测试覆盖「已中止的调用必须失败」 |
+
+**阶段边界**：本版只做**插件注册契约的版本适配**，不改动浏览器控制能力本身；PTC mode 下的
+「浏览器工具经 `run_code` 程序内调用」由宿主 SDK 自动投影（插件无需额外声明），但也未额外提供
+PTC-only 的 SDK 语义增强，留作后续增量，避免过度设计。
+
+---
+
 ## 最新版本（最高权重）· v1.6.0 — 游戏控制流沉淀：画像级调度与 MCP 接入（ISSUE #29 S4，2026-09-06）
 
 v1.6.0 落地 ISSUE #29 的收尾 S4「画像级调度 + MCP 接入」，把 S1..S3 沉淀的画像/状态树收敛为**按游戏项目隔离的可用会话**，让本地 AI 通过 MCP 直接驱动「同一游戏 → 同一份沉淀」，真正达成 ISSUE 里「用一个 MCP 对应一个端口、按游戏项目沉淀能力」的诉求：
