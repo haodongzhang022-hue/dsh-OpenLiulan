@@ -72,6 +72,9 @@ const SCHEMA_CASES = [
   ['空 enum', { type: 'string', enum: [] }],
   ['注解式节点', { description: 'x' }],
   ['数组 items', { type: 'array', items: S('number') }],
+  // 非标量取值：本仓库曾用 filter 静默丢弃，宿主则是直接拒绝——差分钉住「一致拒绝」
+  ['非标量 const', { type: 'string', const: { a: 1 } }],
+  ['非标量 enum 元素', { type: 'string', enum: [{ a: 1 }] }],
 ];
 
 describe('dsh-schema 与真实宿主差分', () => {
@@ -128,10 +131,21 @@ describe('normalizeSchema 的边界如实（不宣称「压平后必通过」）
     expect(normalizedEnum.enum).toEqual([1]);
   });
 
+  it('非标量取值同样原样保留（曾走 filter 丢弃分支 = 静默放宽）', () => {
+    // 旧实现：标量不匹配 → 保留；对象/数组取值 → filter 丢掉 → PASS。
+    // 同一份 docstring 只对前者成立，属「文档超前于实现」。
+    expect(normalizeSchema({ type: 'string', const: { a: 1 } }).const, '丢弃 const 会把「必须是 {a:1}」静默放宽').toEqual({
+      a: 1,
+    });
+    expect(normalizeSchema({ type: 'string', enum: [{ a: 1 }] }).enum).toEqual([{ a: 1 }]);
+  });
+
   it('同一份 schema 由注册期自检拒绝（最终闸门在 checkSupportedSchema）', () => {
     const violations = [
       ...checkSupportedSchema(normalizeSchema({ type: 'string', const: null })),
       ...checkSupportedSchema(normalizeSchema({ type: 'string', enum: [1] })),
+      ...checkSupportedSchema(normalizeSchema({ type: 'string', const: { a: 1 } })),
+      ...checkSupportedSchema(normalizeSchema({ type: 'string', enum: [{ a: 1 }] })),
     ];
     expect(violations.some((v) => v.includes('const'))).toBe(true);
     expect(violations.some((v) => v.includes('enum'))).toBe(true);

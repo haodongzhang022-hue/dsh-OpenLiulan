@@ -14,7 +14,9 @@
  * 统计 `callTool` 调用数）。这里保留宿主侧断言，是为了确认插件与宿主语义
  * 不冲突，而不是把它当插件护栏的证明。
  *
- * 依赖不可用时自动跳过（本仓库把 DSH 声明为可选 peer，离线环境仍可跑其余测试）。
+ * **依赖缺失不得静默跳过**：本文件此前用 `if (!available) return;`，导入失败时
+ * 6 例全部空过并报「6 passed」——零断言的假绿（与 `dsh-schema.test.mjs` 同一病灶）。
+ * 现在改为硬断言：装不上宿主就红，因为「真实宿主上跑没跑过」本身就是结论。
  */
 import { describe, it, expect, beforeAll } from 'vitest';
 
@@ -43,6 +45,14 @@ beforeAll(async () => {
   }
 });
 
+/** 依赖缺失即失败：真宿主没跑过 = 结论不成立，不能算通过。 */
+function requireHost() {
+  expect(
+    available,
+    '真实宿主依赖不可用（@deepseek-ai/cordis / dsh-tools / dsh-system-prompt）：本用例必须真跑，不得静默跳过',
+  ).toBe(true);
+}
+
 /** 装配一个真实的 harness 上下文并加载插件。 */
 async function mount(prefix = 'browser') {
   const ctx = new Context();
@@ -55,9 +65,9 @@ async function mount(prefix = 'browser') {
   return { ctx, tools };
 }
 
-describe.runIf(true)('DSH 真实宿主兼容性', () => {
+describe('DSH 真实宿主兼容性', () => {
   it('真实 ToolRuntime 上注册 MCP 工具表的全部工具', async () => {
-    if (!available) return;
+    requireHost();
     const { tools } = await mount();
     const names = tools.schemas().map((s) => s.name).sort();
     expect(names).toEqual(EXPECTED_TOOLS);
@@ -65,7 +75,7 @@ describe.runIf(true)('DSH 真实宿主兼容性', () => {
   });
 
   it('识别新版 DSH 版本线（mode 取值含 ptc 或 code）', async () => {
-    if (!available) return;
+    requireHost();
     await mount();
     const profile = loadProfile('browser');
     expect(profile).toBeDefined();
@@ -74,7 +84,7 @@ describe.runIf(true)('DSH 真实宿主兼容性', () => {
   });
 
   it('parameters 是受支持子集（object 根 + 仅白名单 keyword）', async () => {
-    if (!available) return;
+    requireHost();
     const { tools } = await mount();
     for (const schema of tools.schemas()) {
       expect(schema.parameters.type, schema.name).toBe('object');
@@ -89,7 +99,7 @@ describe.runIf(true)('DSH 真实宿主兼容性', () => {
   });
 
   it('真实 dispatch 走通 execute → output.schema → render 全链路', async () => {
-    if (!available) return;
+    requireHost();
     const { tools } = await mount();
     const result = await tools.execute({
       callId: 'call-openliulan-1',
@@ -105,7 +115,7 @@ describe.runIf(true)('DSH 真实宿主兼容性', () => {
   });
 
   it('宿主 dispatch 层会拦下已中止的调用（宿主行为，非插件护栏证据）', async () => {
-    if (!available) return;
+    requireHost();
     const { tools } = await mount();
     const ac = new AbortController();
     ac.abort();
@@ -120,7 +130,7 @@ describe.runIf(true)('DSH 真实宿主兼容性', () => {
   });
 
   it('卸载插件后工具全部回收，且加载画像同步清理', async () => {
-    if (!available) return;
+    requireHost();
     const root = new Context();
     root.plugin(SystemPrompt, {});
     root.plugin(ToolRuntime, {});

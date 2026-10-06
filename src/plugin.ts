@@ -222,7 +222,7 @@ export function apply(ctx: HostContext, config: Record<string, unknown> = {}): v
     // 且必须是**对象根**（`ParameterJsonSchema extends ObjectJsonSchema`）。
     // MCP 侧 inputSchema 本就是 { type: 'object', properties, required }；
     // 经 normalizeSchema 收敛 keyword 后强制对象根（不做类型一致性修正，
-    // 类型不匹配的 const/enum 由下方注册期自检拒绝）。additionalProperties
+    // const/enum 一律原样保留、由下方注册期自检拒绝）。additionalProperties
     // 只在作者显式声明时保留，不擅自加严。
     const normalized = normalizeSchema(tool.inputSchema);
     const parameters: SupportedParameters = {

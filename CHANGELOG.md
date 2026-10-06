@@ -21,9 +21,9 @@ v1.3.0 完成 ISSUE #33「适配 dsh 新版」：DSH 的 `@deepseek-ai/dsh-tools
 | 增强点 | 做了什么 |
 | :--- | :--- |
 | 版本线探测 | 不导入任何 `@deepseek-ai/dsh-tools` 符号，改用 `ctx.tools.constructor.Config` 的公开投影判定版本线：`mode` 取值含 `ptc` → 新版（modern），含 `code` → 旧版（legacy），无法判定时按兼容路径注册并如实报 `unknown`，不抛错、不阻断加载 |
-| schema 规范化 | 新增 `src/dsh-schema.ts`：把 MCP 侧宽松 `inputSchema` / 输出 schema **按 keyword 白名单收敛**到 DSH 强制的受支持 JSON Schema 子集（`oneOf` 与 `type` 互斥、`required` 必须落在 `properties` 内、强制对象根）。**不做类型一致性修正**——类型不匹配的 `const` / `enum` 原样保留，交给注册期自检拒绝（丢弃它等于静默放宽约束）；**也不擅自加严**：作者未声明 `additionalProperties` 时保持「未声明 = 宽松」 |
+| schema 规范化 | 新增 `src/dsh-schema.ts`：把 MCP 侧宽松 `inputSchema` / 输出 schema **按 keyword 白名单收敛**到 DSH 强制的受支持 JSON Schema 子集（`oneOf` 与 `type` 互斥、`required` 必须落在 `properties` 内、强制对象根）。**不丢约束、也不做类型一致性修正**——作者声明的 `const` / `enum` 一律原样保留（无论标量还是对象/数组、无论位置是否受支持），交给注册期自检拒绝（丢弃它等于静默放宽约束）；**也不擅自加严**：作者未声明 `additionalProperties` 时保持「未声明 = 宽松」 |
 | schema 结构自检 | 注册前用 `checkSupportedSchema()` 校验**真实的 parameters / output.schema**；违规即抛错、加载失败，而不是「装上了但调用即炸」 |
-| 值判定差分对齐 | `validateAgainstSchema()` 以真实宿主 `validateJsonSchemaValue` 为 oracle 逐例回归（**22 条值例 + 11 条结构例**，含 `const` / `undefined` / 非有限数 / `-0` / 稀疏数组 / 非普通原型），把「同构」从宣称变成可验证事实。依赖缺失时**硬断言失败**，不再静默空过 |
+| 值判定差分对齐 | `validateAgainstSchema()` 以真实宿主 `validateJsonSchemaValue` 为 oracle 逐例回归（**22 条值例 + 13 条结构例**，含 `const` / `undefined` / 非有限数 / `-0` / 稀疏数组 / 非普通原型），把「同构」从宣称变成可验证事实。依赖缺失时**硬断言失败**，不再静默空过 |
 | `exec.signal` 取消语义 | `execute(args, exec)` 双参签名显式 `throwIfAborted()`：已中止的调用不触达工具体。**有鉴别力的证据**：`test/plugin-cancel.test.mjs` 直接调工具体并统计 `callTool` 零调用（真宿主 dispatch 那条会自己拦下，删掉插件护栏仍全绿，故不作为插件证据） |
 | 类型声明解耦 | 新增 `src/dsh-types.ts`：用本地结构化声明替代 `import type { Context } from '@deepseek-ai/cordis'`，产物与源码都不含宿主包符号；新增 `tsconfig.json` + `npm run typecheck`，离线环境也可类型检查 |
 | 工具清单不硬编码 | 插件与冒烟测试的期望清单都从唯一事实来源 `@openliulan/mcp-server` 的 `TOOLS` / `GAME_TOOLS` 推导，后续批次往 MCP 加工具时插件自动跟随，不会漏注册也测不出「漏注册」 |
@@ -65,6 +65,24 @@ PR #35 的 CI 在 `test` 阶段红：`packages/engines/test/real-browser.accepta
 | 断言分层 | 本地 fixture 站点验 DOM 真值（navigate/observe/extract/click 跳转/诊断）；真实公网只验**站点身份与加载成功**（url 含 `example.com`、标题匹配 `/example/i`），不绑第三方 DOM 细节 |
 | 保留反「假装测试」力度 | 用例数 4 → 5，仍真实启动 headless Chromium 驱动真实代码路径；鉴别力实测：把 `extract` 的文本返回值改成空串后，本地 fixture 用例立刻红 |
 | 同源隐患同修 | `examples/ci-spec.json` 与 `docs/mcp-integration.md` 的断言目标由 `h1` 改为 `title`（并注明原因）；`quickstart.mjs` / `stealth-viz.mjs` 的 extract 目标同步改为 `title`，避免示例静默取空值 |
+
+---
+
+## 修复 · v1.3.0 补丁 — 复评处置：非标量 const/enum 不再静默丢弃 + 两处零断言假绿（2026-10-07）
+
+PR #35 复评（第 1 次返工交回）判定必修项清零、放行，并提了三条 🟡。本轮一并处置：
+
+| 项 | 问题 | 处置 |
+| :--- | :--- | :--- |
+| 🟡-D | docstring 写「类型不匹配的 `const` / `enum` 会原样保留」，实测只有**标量**如此；对象/数组取值走 `filter` 丢弃分支，`{ type: 'string', enum: [{ a: 1 }] }` 的 enum 被整体删除后 PASS——正是 🟡-A 想避免的「静默放宽」 | 收窄实现而非收窄文档：`normalizeSchema()` **不再筛选**，`const` / `enum` 一律原样保留，由注册期自检拒绝。标量与非标量行为一致，也与宿主一致（宿主对这两种写法都直接拒绝） |
+| 🟡-E | `test/plugin-dsh-compat.test.mjs` 仍有 6 处 `if (!available) return;`；移走 `@deepseek-ai` 后该文件照样报「6 passed」 | 换成同一套 `requireHost()` 硬断言（与 `dsh-schema.test.mjs` 同源）；实测移走宿主后 **6 failed**，报「本用例必须真跑，不得静默跳过」 |
+| 🟡-F | `test/plugin-smoke.mjs` 删掉唯一那处 `require(...)` 用法后，`createRequire` 与 `node:module` 导入成了孤儿 | 一并删除 |
+| 🟢-A | `OPENLIULAN_BUILD_ENTRY/OUTFILE/METAFILE` 直接决定生产构建入口与落盘位置 | 保留该开口（钉住生产脚本本身的必要代价），在 `build-plugin.mjs` 注释里点明**仅供测试用**、发布/CI 不得设置 |
+
+**顺带修正一处计数**：上一版 CHANGELOG 写「22 条值例 + 11 条结构例」，本轮补入
+「非标量 `const` / 非标量 `enum` 元素」两条结构例（差分 oracle 钉住「本仓库与宿主一致拒绝」），
+现为 **22 条值例 + 13 条结构例**。🟡-C 的更正已接受：`963ec97` 那行原本没有计数，
+此前「23→22」的过程描述与仓库事实不符，本轮不再复述该说法。
 
 ---
 

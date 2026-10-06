@@ -14,9 +14,11 @@
  * 本模块承担三件事：
  * 1. **规范化**（{@link normalizeSchema}）：对 MCP 侧宽松的 `inputSchema` 做
  *    **keyword 白名单收敛**——丢弃未知 keyword、把 `required` 收敛到
- *    `properties` 之内、强制对象根。它**不做类型一致性修正**：作者写的
- *    `{ type: 'string', const: null }` 会被原样保留，因为丢弃它等于静默放宽
- *    约束（从「必须是 null」变成「任意值」）。这类 schema 由
+ *    `properties` 之内、强制对象根。它**不丢约束、也不做类型一致性修正**：
+ *    作者写的 `const` / `enum` 一律原样保留，无论取值是标量还是对象/数组、
+ *    也无论位置是否受支持（如 `{ type: 'string', const: null }`、
+ *    `{ type: 'string', enum: [{ a: 1 }] }`）。丢弃它们等于静默放宽约束
+ *    （从「必须是 null」变成「任意值」）。这类 schema 由
  *    {@link checkSupportedSchema} 在注册期拒绝，宿主
  *    `assertSupportedJsonSchema` 同样拒绝——行为一致，早失败优于调用即炸。
  *    **不擅自加严**：作者没声明 `additionalProperties` 时保持
@@ -41,14 +43,15 @@ export interface SupportedSchemaNode {
   required?: string[];
   additionalProperties?: boolean;
   items?: SupportedSchemaNode;
-  enum?: (string | number | boolean | null)[];
-  const?: string | number | boolean | null;
+  /** 作者声明的 `enum`，**原样保留**（是否受支持由 {@link checkSupportedSchema} 判定）。 */
+  enum?: unknown;
+  /** 作者声明的 `const`，**原样保留**（是否受支持由 {@link checkSupportedSchema} 判定）。 */
+  const?: unknown;
   description?: string;
   title?: string;
 }
 
 const SCHEMA_TYPES = new Set(["object", "array", "string", "number", "integer", "boolean", "null"]);
-const SCALAR_TYPES = new Set(["string", "number", "integer", "boolean", "null"]);
 const CONSTRAINT_KEYWORDS = new Set([
   "type",
   "oneOf",
@@ -140,11 +143,17 @@ export function isLosslessJson(value: unknown): boolean {
 /**
  * 把任意宽松 schema 收敛到受支持子集的 keyword 白名单。
  *
- * **边界（曾文档失实）**：本函数只做 keyword 白名单收敛，**不做类型一致性
- * 修正**。类型不匹配的 `const` / `enum`（如 `{ type: 'string', const: null }`）
- * 会原样保留，随后被 {@link checkSupportedSchema} 拒绝——这是有意的：丢弃
- * 约束会让「必须是 null」静默变成「任意值」，比直接报错更危险。因此本函数
- * 的返回值**不保证**通过 `checkSupportedSchema`；注册期自检才是最终闸门。
+ * **边界（曾两度文档失实）**：本函数只做 keyword 白名单收敛，**不丢约束、
+ * 也不做类型一致性修正**。作者声明的 `const` / `enum` 一律原样保留，随后由
+ * {@link checkSupportedSchema} 判定——这是有意的：丢弃约束会让「必须是 null」
+ * 静默变成「任意值」，比直接报错更危险。
+ *
+ * 这里踩过一次「文档只对一半」的坑：早先实现用 `filter` 丢弃非标量取值，
+ * 于是 `{ type: 'string', const: null }` 保留、而 `{ type: 'string', enum: [{ a: 1 }] }`
+ * 被静默丢弃——同一份 docstring 只对前者成立。现在两者行为一致：**一律保留**，
+ * 由注册期自检拒绝（宿主同样拒绝这两种写法）。
+ *
+ * 因此本函数的返回值**不保证**通过 `checkSupportedSchema`；注册期自检才是最终闸门。
  *
  * 规则：
  * - 只保留白名单 keyword；`oneOf` 与 `type` 互斥（保留 `oneOf`）。
@@ -185,21 +194,14 @@ export function normalizeSchema(raw: unknown): SupportedSchemaNode {
     out.type = declaredType as SupportedSchemaNode["type"];
   }
 
-  // 标量 enum / const：仅在声明了标量 type 时保留（数组/对象上的 enum 直接
-  // 丢弃）；保留时**不校验元素/取值与 type 是否匹配**，不匹配的留给注册期自检拒绝。
-  const isScalar = out.type !== undefined && SCALAR_TYPES.has(out.type);
-  if (isScalar) {
-    if (Array.isArray(raw.enum) && raw.enum.length > 0) {
-      out.enum = raw.enum.filter(
-        (v): v is string | number | boolean | null =>
-          v === null || ["string", "number", "boolean"].includes(typeof v),
-      );
-      if (out.enum.length === 0) delete out.enum;
-    }
-    if (raw.const !== undefined && (raw.const === null || ["string", "number", "boolean"].includes(typeof raw.const))) {
-      out.const = raw.const as string | number | boolean | null;
-    }
-  }
+  // enum / const：**原样保留，不筛选、不丢弃**。
+  //
+  // 早先这里只在标量 type 下保留，并用 filter 丢掉非标量取值——那是静默放宽：
+  // 「必须是 {a:1}」被悄悄降级为「任意值」。既然宿主对同一份 schema 是直接
+  // 拒绝（`enum must be a non-empty array of <type> values`），本模块就如实保留
+  // 约束，把判定交给注册期自检，行为与宿主一致。
+  if (raw.enum !== undefined) out.enum = raw.enum;
+  if (raw.const !== undefined) out.const = raw.const;
 
   // 数组 items。
   if (out.type === "array" && raw.items !== undefined) {
@@ -404,7 +406,9 @@ export function validateAgainstSchema(schema: SupportedSchemaNode, value: unknow
   }
 
   const enumViolation = (): string[] => {
-    if (schema.enum !== undefined && !schema.enum.includes(value as string | number | boolean | null)) {
+    // 只在规范化后通过自检的 schema 上调用，故 `enum` 必为非空数组；仍做形状检查
+    // 以免畸形输入（未过自检）在这里抛出。
+    if (Array.isArray(schema.enum) && !schema.enum.includes(value)) {
       return [`"${path}" must be one of ${JSON.stringify(schema.enum)}`];
     }
     if (schema.const !== undefined && value !== schema.const) {

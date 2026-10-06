@@ -44,6 +44,11 @@ const resolveOpenliulan = {
  * 入口 / 产物 / 元数据落点。生产路径用默认值；反证用例
  * （`test/build-plugin.test.mjs`）用环境变量把入口换成含真实宿主 import 的
  * 探针，断言**本脚本**非零退出——体检挂在生产路径上，不是平行实现。
+ *
+ * 这三个环境变量**仅供测试用**（`OPENLIULAN_BUILD_*`，见上）。它们能改生产
+ * 构建的入口与落盘位置，这是「让测试钉住生产脚本本身」的必要代价：不这么开
+ * 口子，反证就只能测平行实现，生产路径照样可以静默失效。**发布/CI 不得设置
+ * 它们**；未设置时行为与从前逐字节一致。
  */
 const entryPoint = process.env.OPENLIULAN_BUILD_ENTRY ?? resolve(root, 'src/plugin.ts');
 const outfile = process.env.OPENLIULAN_BUILD_OUTFILE ?? resolve(root, 'lib/index.js');

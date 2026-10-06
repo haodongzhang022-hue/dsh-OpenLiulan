@@ -11,11 +11,9 @@
  * 4. 产物不内联 DSH 宿主包——用构建期体检的**同一份** findHostInputs() 判定
  *    生产构建落盘的输入图（字符串匹配拦不住内联，只会假绿）。
  */
-import { createRequire } from 'node:module';
 import { readFile } from 'node:fs/promises';
 import { statSync } from 'node:fs';
 import { findHostInputs } from '../scripts/host-inlining-guard.mjs';
-const require = createRequire(import.meta.url);
 const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 
 const mod = await import('../lib/index.js');
