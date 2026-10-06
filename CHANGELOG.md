@@ -7,54 +7,46 @@
 
 ---
 
-## 最新版本（最高权重）· v1.7.0 — DSH 新版适配：PTC 时代插件规则对齐 + 双版本兼容（ISSUE #33，2026-09-18）
+## 最新版本（最高权重）· v1.3.0 — DSH 新版适配：PTC 时代插件规则对齐 + 双版本兼容（ISSUE #33，2026-08-30）
 
-v1.7.0 完成 ISSUE #33「适配 dsh 新版」：DSH 的 `@deepseek-ai/dsh-tools` 已从 **`0.1.1` 线**演进到
+v1.3.0 完成 ISSUE #33「适配 dsh 新版」：DSH 的 `@deepseek-ai/dsh-tools` 已从 **`0.1.1` 线**演进到
 **`0.1.6` 线**，聚合执行器由 **Code Mode 改名 PTC mode**，工具注册契约随之变化。
-v1.3.0 曾做过一轮「新版插件规则」适配，但那一轮只覆盖到 `0.1.1` 的规则；本版把插件升级为
-**一份产物同时适配新旧两条版本线**，并用真实宿主的 `ToolRuntime` 把每一条硬约束固化成测试与 CI。
+本版把插件升级为**一份产物同时适配新旧两条版本线**，并用真实宿主的 `ToolRuntime`
+把每一条**真实存在**的硬约束固化成测试与 CI。
+
+> 版本号说明：本版为**单一版本 `1.3.0`**。此前草稿曾把同一批改动写成 `1.7.0`（从 `1.2.0`
+> 一跳五版却只加一条日志），版本号与改动量不符，已收敛为 `1.3.0`——
+> 与「上一版 `1.2.0` 的可安装插件包」直接衔接。
 
 | 增强点 | 做了什么 |
 | :--- | :--- |
 | 版本线探测 | 不导入任何 `@deepseek-ai/dsh-tools` 符号，改用 `ctx.tools.constructor.Config` 的公开投影判定版本线：`mode` 取值含 `ptc` → 新版（modern），含 `code` → 旧版（legacy），无法判定时按兼容路径注册并如实报 `unknown`，不抛错、不阻断加载 |
-| 保留名护栏 | 新增 `assertNotReserved()`：新版把 Code Mode 改名 PTC mode，但 `run_code` 仍是保留的 presentation transport，宿主 `register()` 对其直接抛错；插件提前显式失败，让用户看到「prefix 选得不对」而不是宿主内部错误 |
-| schema 规范化 | 新增 `src/dsh-schema.ts`：把 MCP 侧宽松 `inputSchema` 压平为 DSH 强制的受支持 JSON Schema 子集（白名单 keyword、`oneOf` 与 `type` 互斥、`required` 必须落在 `properties` 内、`additionalProperties` 显式布尔位、强制对象根），并提供同构的 `validateAgainstSchema` 供注册期自检 |
-| `output.schema` 自检 | 注册前对每枚工具的 canonical value 契约逐一校验，结果写入「加载画像」；schema 违规不再表现为「装上了但调用即炸」 |
-| `exec.signal` 取消语义 | `execute(args, exec)` 双参签名显式 `throwIfAborted()`：已中止的调用不触达工具体（浏览器不会被启动），与新版在取消窗口返回 `ABORTED` / `ABORTED_BEFORE_DISPATCH` 的语义对齐 |
+| schema 规范化 | 新增 `src/dsh-schema.ts`：把 MCP 侧宽松 `inputSchema` / 输出 schema 压平为 DSH 强制的受支持 JSON Schema 子集（白名单 keyword、`oneOf` 与 `type` 互斥、`required` 必须落在 `properties` 内、强制对象根）。**不擅自加严**：作者未声明 `additionalProperties` 时保持「未声明 = 宽松」 |
+| schema 结构自检 | 注册前用 `checkSupportedSchema()` 校验**真实的 parameters / output.schema**；违规即抛错、加载失败，而不是「装上了但调用即炸」 |
+| 值判定差分对齐 | `validateAgainstSchema()` 以真实宿主 `validateJsonSchemaValue` 为 oracle 逐例回归（含 `const` / `undefined` / 非有限数 / `-0` / 稀疏数组 / 非普通原型），把「同构」从宣称变成可验证事实 |
+| `exec.signal` 取消语义 | `execute(args, exec)` 双参签名显式 `throwIfAborted()`：已中止的调用不触达工具体。**有鉴别力的证据**：`test/plugin-cancel.test.mjs` 直接调工具体并统计 `callTool` 零调用（真宿主 dispatch 那条会自己拦下，删掉插件护栏仍全绿，故不作为插件证据） |
 | 类型声明解耦 | 新增 `src/dsh-types.ts`：用本地结构化声明替代 `import type { Context } from '@deepseek-ai/cordis'`，产物与源码都不含宿主包符号；新增 `tsconfig.json` + `npm run typecheck`，离线环境也可类型检查 |
 | 工具清单不硬编码 | 插件与冒烟测试的期望清单都从唯一事实来源 `@openliulan/mcp-server` 的 `TOOLS` / `GAME_TOOLS` 推导，后续批次往 MCP 加工具时插件自动跟随，不会漏注册也测不出「漏注册」 |
-| 跨版本产物体检 | `scripts/build-plugin.mjs` 增加**构建期体检**：若 `lib/index.js` 内联了 `@deepseek-ai/dsh-tools` / `@deepseek-ai/cordis` 即构建失败——把「不得钉死 DSH 版本」变成硬约束而非口头约定 |
-| 真实宿主验收 | 新增 `test/plugin-dsh-compat.test.mjs`（7 例）：用真实 cordis + ToolRuntime 装配插件，验收注册清单、版本线、schema 子集、`execute → output.schema → render` 全链路、取消语义、保留名护栏、effect 卸载回收 |
-| 双版本 CI 验收 | 新增 `scripts/dsh-compat-check.mjs`：在**隔离临时目录**各装一份真实宿主，分别跑旧版（`0.1.1-rc.2`）与新版（`0.1.6-alpha.2`）适配验收；`.cnb.yml` 的 `main` 与 `pull_request` 均新增 `dsh-compat` 任务，验收失败即 CI 红 |
+| 跨版本产物体检 | `scripts/host-inlining-guard.mjs`：产物内联任何 `@deepseek-ai/*` 即**构建失败**。判定走 `metafile.inputs`（`write: true` 下 `outputFiles` 恒 `undefined`，用它会让体检静默失效），且命中即 `throw`（`onEnd` 里往 `errors` 推条目不会让构建失败）。`test/build-plugin.test.mjs` 注入真实宿主 import 做反证 |
+| 保留名护栏（降级） | `assertNotReserved()` 明确为**防御性保留**、非硬约束：真实路径上默认不可达（MCP 工具表无 `code` 工具，`prefix="run"` 产出的是 `run_observe`）。主防线是命名前缀；判定同时覆盖 `tool.name` 本身作为兜底。可达性边界由 `test/plugin-reserved-name.test.mjs` 钉住 |
+| 加载画像清理 | `PROFILES` 随插件卸载（effect disposer）同步清理，避免同 prefix 重载后读到陈旧画像 |
+| 真实宿主验收 | `test/plugin-dsh-compat.test.mjs`：用真实 cordis + ToolRuntime 装配插件，验收注册清单、版本线、schema 子集、`execute → output.schema → render` 全链路、宿主取消兜底、effect 卸载回收与画像清理 |
+| 双版本 CI 验收 | `scripts/dsh-compat-check.mjs`：在**隔离临时目录**各装一份真实宿主，分别跑旧版（`0.1.1-rc.2`）与新版（`0.1.6-alpha.2`）适配验收；`.cnb.yml` 的 `main` 与 `pull_request` 均挂 `dsh-compat` 任务 |
+| CI 覆盖离目录冒烟 | `.cnb.yml` 的 `build-and-test` 增加 `npm run test:plugin`——此前该自检存在但**不在 CI**，插件产物坏了 CI 也不红 |
 
-**新版适配的三条硬约束与对应处置**：
+**新版适配的两条硬约束与一项防御性保留**：
 
 | 新版约束 | 不处置的后果 | 本版处置 |
 | :--- | :--- | :--- |
-| `run_code` 为保留工具名 | 用户改 prefix 后宿主 `register()` 抛错，报错信息指向宿主内部 | 注册前 `assertNotReserved()` 显式失败 + 指明 prefix 冲突 |
-| `output.schema` 受强制 JSON Schema 子集校验（`assertSupportedJsonSchema`） | 作者侧 `type: 'json'` 等写法被直接拒绝，插件整个加载失败 | 统一走 `normalizeSchema()` 压平；注册期 `validateAgainstSchema()` 自检 |
-| `execute(args, exec)` 必须尊重 `exec.signal` | 长任务无视宿主取消，与新版取消窗口的 `ABORTED` 语义不一致 | 双参签名显式 `throwIfAborted()`；测试覆盖「已中止的调用必须失败」 |
+| schema 受强制 JSON Schema 子集校验（`assertSupportedJsonSchema`） | 作者侧 `type: 'json'` 等写法被直接拒绝，插件整个加载失败 | 统一走 `normalizeSchema()` 压平；注册期 `checkSupportedSchema()` 对真实 schema 自检，违规即加载失败 |
+| `execute(args, exec)` 必须尊重 `exec.signal` | 长任务无视宿主取消，与新版取消窗口的 `ABORTED` 语义不一致 | 双参签名显式 `throwIfAborted()`；`test/plugin-cancel.test.mjs` 以「已中止 → `callTool` 零调用」为证据 |
+| （防御性保留，非硬约束）`run_code` 为保留工具名 | 若用户把 prefix 改成 `run` 且 MCP 侧恰有 `code` 工具，宿主 `register()` 会抛错 | 主防线是命名前缀（默认 `browser_`）；`assertNotReserved()` 兜底并指明 prefix 冲突。**不当作硬约束宣称** |
 
 **阶段边界**：本版只做**插件注册契约的版本适配**，不改动浏览器控制能力本身。PTC mode 下
 「浏览器工具经 `run_code` 程序内调用」由宿主 SDK 自动投影，插件无需额外声明；也未额外提供
 PTC-only 的 SDK 语义增强（如按 scope 调 `presentAs('ptc')`），留作后续增量，避免过度设计。
 
 ---
-
-## 最新版本（最高权重）· v1.3.0 — DSH 新版插件规则适配（2026-08-30）
-
-v1.3.0 适配 DSH 新版插件规则，解决旧插件在新版 DSH 中不兼容的问题：
-
-| 增强点 | 做了什么 |
-| :--- | :--- |
-| `inject` 声明 | `src/plugin.ts` 导出 `inject = ['tools']`，等待 host 的 `ctx.tools`（ToolRuntime）服务就绪后再加载，旧版直接访问 `ctx.tools` 导致加载顺序不可靠 |
-| `parameters` 完整 JSON Schema | 工具注册改为传递完整 `{ type, properties, required }` 的 ParameterJsonSchema，旧版只传 `properties` 在新版不兼容 |
-| `output.schema` 强化 | `additionalProperties` 显式声明，嵌套内容块 schema 类型更精确，符合新版 DSH 对 JSON Schema 子集的强制校验 |
-| `execute` 返回 canonical value | 返回符合 `output.schema` 声明的 canonical value，`render` 负责投影为模型内容块 |
-| `peerDependencies` | `package.json` 声明 `@deepseek-ai/cordis: ^4.0.1`，安装器据此校验宿主版本兼容性 |
-| `cordis.patch.yml` 精简 | `insert` 只保留 `id` 和 `name`，配置默认值交由代码内部处理，用户可在自己的 profile 中自由覆盖 |
-| 注册标签细化 | 每个工具注册的 effect 标签从单一 `openliulan.tool` 细化为 `openliulan.tool.<toolName>`，便于诊断定位 |
-
 
 ## 最新版本（最高权重）· v1.2.0 — 可安装 DSH 插件包（2026-08-29）
 
@@ -117,6 +109,7 @@ v1.1.0 是「从自研可调，到生态里开箱即接」的一轮增强：把 
 
 | 版本 | 时间戳 | 一句话 |
 | :--- | :--- | :--- |
+| **v1.3.0** | 2026-08-30 | DSH 新版适配：一份产物同时适配 Code mode 线与 PTC mode 线（ISSUE #33） |
 | **v1.2.0** | 2026-08-29 | 可安装 DSH 插件包：一个命令安装到 dsh profile（cnb.cool/GitHub/npm） |
 | **v1.1.0** | 2026-08-29 | DeepSeek Harness 接入适配增强（Harness/Trae/OpenCode 开箱即接） |
 | v1.0.0 | 2026-08-18 | 首个正式版：四合一框架 + 自愈调试 + 6星能力 + 双引擎 + 安全加固 |

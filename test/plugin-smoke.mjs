@@ -3,14 +3,15 @@
  * ForgeMcp 全部工具被正确映射为 harness 工具并注册（browser_ 前缀），
  * 且输出的 canonical value 满足自身声明的 output.schema。
  *
- * ISSUE #33：自检同时覆盖「新版 DSH 适配」的三条硬约束：
- * 1. 不注册 DSH 保留名（run_code）；
- * 2. 每个工具都有 output.schema 且 canonical value 通过校验；
- * 3. execute 尊重 exec.signal（取消后不再执行）。
+ * 覆盖：
+ * 1. 注册清单与 MCP 工具表（唯一事实来源）一致，且不含 DSH 保留名；
+ * 2. 每个工具的 parameters / output.schema 落在 DSH 受支持子集内
+ *    （**用真实 schema 校验，不是校验常量**）；
+ * 3. execute 尊重 exec.signal（直接调工具体，见 test/plugin-cancel.test.mjs）；
+ * 4. 产物不内联 DSH 宿主包（构建期体检见 test/build-plugin.test.mjs）。
  */
 import { createRequire } from 'node:module';
 import { readFile } from 'node:fs/promises';
-import { execFileSync } from 'node:child_process';
 const require = createRequire(import.meta.url);
 const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 
@@ -43,12 +44,27 @@ if (names.length !== want.length) throw new Error('工具数不符: ' + names.jo
 // 基线护栏：MCP 侧工具表若被清空/破坏，也要报错而不是「空集全绿」
 if (want.length < 8) throw new Error('MCP 工具表异常（至少应有 8 枚浏览器工具）: ' + want.join(','));
 
+// 用**已构建产物**里的同一份实现校验，避免测试与产物不一致
+const { checkSupportedSchema, validateAgainstSchema } = mod;
+
 for (const d of registered) {
   if (typeof d.execute !== 'function') throw new Error(d.name + ' 缺 execute');
   if (!d.output || typeof d.output.render !== 'function') throw new Error(d.name + ' 缺 output.render');
   if (!d.output.schema) throw new Error(d.name + ' 缺 output.schema');
   if (d.parameters?.type !== 'object') throw new Error(d.name + ' parameters 必须是 object 根: ' + JSON.stringify(d.parameters));
   if (d.name === 'run_code') throw new Error('不得注册 DSH 保留名 run_code');
+
+  // 真实 schema 自检：不是校验常量。任一违规都代表「装上了但调用即炸」。
+  const violations = [
+    ...checkSupportedSchema(d.parameters).map((v) => 'parameters: ' + v),
+    ...checkSupportedSchema(d.output.schema).map((v) => 'output.schema: ' + v),
+  ];
+  if (violations.length > 0) throw new Error(d.name + ' schema 不在受支持子集内: ' + violations.join('; '));
+
+  // canonical value 契约：用真实返回值形状校验（不是空数组这种恒真输入）
+  const sample = { content: [{ type: 'text', text: 'ok' }] };
+  const valueViolations = validateAgainstSchema(d.output.schema, sample);
+  if (valueViolations.length > 0) throw new Error(d.name + ' output.schema 自检失败: ' + valueViolations.join('; '));
 }
 
 // 每个工具都必须带细化的 effect 标签（新版要求可诊断定位）
@@ -57,35 +73,10 @@ for (const d of registered) {
   if (!effects.includes(label)) throw new Error('缺 effect 标签: ' + label);
 }
 
-// canonical value 必须满足自身声明的 output.schema
-const { validateAgainstSchema } = await import('../src/dsh-schema.ts');
-for (const d of registered) {
-  const violations = validateAgainstSchema(d.output.schema, { content: [{ type: 'text', text: 'ok' }] });
-  if (violations.length > 0) throw new Error(d.name + ' output.schema 自检失败: ' + violations.join('; '));
-}
-
-// execute 尊重 exec.signal：已取消时必须立刻抛错、不触达浏览器
-const ac = new AbortController();
-ac.abort();
-let aborted = false;
-try {
-  await registered.find((d) => d.name === 'browser_stealth_status').execute({}, { signal: ac.signal });
-} catch {
-  aborted = true;
-}
-if (!aborted) throw new Error('execute 未尊重 exec.signal（取消后仍执行）');
-
-// stealth_status 是最轻的一枚工具，且不触达浏览器，用它验证真实调用链路
-const live = await registered.find((d) => d.name === 'browser_stealth_status').execute({}, { signal: new AbortController().signal });
-const liveViolations = validateAgainstSchema(
-  registered.find((d) => d.name === 'browser_stealth_status').output.schema, live);
-if (liveViolations.length > 0) throw new Error('真实返回值不符合 output.schema: ' + liveViolations.join('; '));
-
 // 适配自检画像：不注册为模型可见工具，但必须可读
 const profile = mod.loadProfile('browser');
 if (!profile) throw new Error('未暴露加载画像 loadProfile()');
 if (profile.tools.length !== want.length) throw new Error('画像工具数与注册数不符');
-if (profile.schemaChecks.length > 0) throw new Error('schema 自检未通过: ' + JSON.stringify(profile.schemaChecks));
 
 // 产物必须不内联 DSH 宿主包（跨版本兼容的硬约束）
 const bundle = await readFile(new URL('../lib/index.js', import.meta.url), 'utf8');

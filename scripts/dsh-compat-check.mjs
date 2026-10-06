@@ -10,8 +10,9 @@
  * 2. `output.schema` 通过宿主的强制 JSON Schema 子集校验；
  * 3. 版本线探测结果符合预期（新版 modern / 旧版 legacy）；
  * 4. `execute(args, exec)` 双参签名跑通，canonical value 合法且 `render` 可投影；
- * 5. `exec.signal` 取消语义生效；
- * 6. DSH 保留名 `run_code` 被拒绝注册。
+ * 5. `exec.signal` 取消语义与宿主一致（注意：宿主自己也会拦下已中止的
+ *    调用，插件侧护栏的**有鉴别力**证据在 test/plugin-cancel.test.mjs）；
+ * 6. DSH 保留名 `run_code` 被拒绝注册（防御性保留，默认不可达）。
  *
  * 用法：node scripts/dsh-compat-check.mjs <modern|legacy>
  * 退出码非零即代表该版本线适配失败（驱动 CI 红/绿）。
@@ -115,7 +116,8 @@ if (JSON.stringify(names) !== JSON.stringify(reported)) {
 if (profile.host.flavor !== ${JSON.stringify(spec.expected)}) {
   throw new Error('版本线探测不符：期望 ${spec.expected}，实得 ' + profile.host.flavor + '（' + profile.host.evidence + '）');
 }
-if (profile.schemaChecks.length > 0) throw new Error('schema 自检未过: ' + JSON.stringify(profile.schemaChecks));
+// schema 结构自检已在注册期强制：违规即 apply() 抛错、插件加载失败，
+// 因此能走到这里就代表全部 schema 通过（不再有恒空的 schemaChecks 数组）。
 
 // 真实 dispatch：execute(args, exec) → output.schema 校验 → render 投影
 const ok = await tools.execute({ callId: 'c-ok', name: 'browser_stealth_status', arguments: {}, signal: new AbortController().signal });
@@ -127,13 +129,15 @@ if (ok.content[0]?.type !== 'text' || !String(ok.content[0].text).includes('防�
   throw new Error('render 投影不符: ' + JSON.stringify(ok.content));
 }
 
-// 取消语义：exec.signal 已中止时必须失败且不触达工具体
+// 取消语义：与宿主一致（宿主 dispatch 自己就会拦下已中止的调用，故这条
+// 只证明「插件不与宿主语义冲突」；插件侧护栏的有鉴别力证据见 test/plugin-cancel.test.mjs）
 const ac = new AbortController(); ac.abort();
 const cancelled = await tools.execute({ callId: 'c-abort', name: 'browser_stealth_status', arguments: {}, signal: ac.signal });
 if (!cancelled.isError) throw new Error('exec.signal 取消语义失效：已中止的调用仍成功');
 
-// 保留名护栏
-if (!mod.assertNotReserved || (() => { try { mod.assertNotReserved('run_code'); return false; } catch { return true; } })() !== true) {
+// 保留名护栏（防御性保留，默认路径不可达；可达性证据见 test/plugin-reserved-name.test.mjs）
+if (typeof mod.assertNotReserved !== 'function') throw new Error('插件未导出 assertNotReserved');
+if ((() => { try { mod.assertNotReserved('run_code'); return false; } catch { return true; } })() !== true) {
   throw new Error('DSH 保留名 run_code 未被拒绝');
 }
 

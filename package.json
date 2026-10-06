@@ -1,6 +1,6 @@
 {
   "name": "@openliulan/dsh-openliulan",
-  "version": "1.7.0",
+  "version": "1.3.0",
   "description": "整合 Browser-Use / Stagehand / Chrome DevTools MCP / Playwright MCP 的统一 AI 浏览器控制框架，强化调试诊断能力并适配 deepseek harness 与 cnb.cool；可安装为 DSH 插件包（一条命令安装到 dsh web profile），兼容 DSH 旧版（Code mode 线）与新版（PTC mode 线）",
   "type": "module",
   "main": "./lib/index.js",

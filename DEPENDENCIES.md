@@ -65,7 +65,7 @@ npx playwright install chromium
 ## 实测验证版本
 
 ```text
-Node.js:   v22.20.0（DSH 双版本验收在 v24.21.0 上亦通过）
+Node.js:   v22.23.3（DSH 双版本验收在 v24.21.0 上亦复跑通过）
 TypeScript: 5.5.x
 Vitest:     3.2.7
 Playwright: 1.62.1
@@ -99,6 +99,10 @@ DSH 有两条接入通道，按下表选一：
 | :--- | :--- | :--- | :--- |
 | 旧版（Code mode） | `0.1.1` 线（本仓库 devDependency 钉 `^0.1.1-rc.2`） | `native \| code \| both` | ✅ 实测通过 |
 | 新版（PTC mode） | `0.1.6` 线（CI 钉 `0.1.6-alpha.2`） | `native \| ptc \| both` | ✅ 实测通过 |
+
+> 「实测通过」的出处：`node scripts/dsh-compat-check.mjs legacy|modern` 在
+> Node.js `22.23.3` 与 `24.21.0` 上各跑一遍，两条线均输出 `DSH_COMPAT_OK` 且退出码为 0。
+> 未列出的 Node 版本**未经实测**，不作兼容性承诺。
 
 `@deepseek-ai/cordis` 仅作类型时使用（本仓库已改为本地结构化声明，构建时被擦除）；
 `peerDependencies` 声明 `^4.0.1`，两版宿主（`4.0.1` / `4.0.2`）均满足。

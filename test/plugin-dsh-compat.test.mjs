@@ -3,12 +3,16 @@
  *
  * ISSUE #33 的核心诉求是「适配 dsh 新版」。本测试用 **真实
  * `@deepseek-ai/cordis` + `@deepseek-ai/dsh-tools` 的 ToolRuntime**
- * 装配插件，逐条验收新版的三处硬约束，避免「假 ctx 全绿、装到真机上炸」：
+ * 装配插件，逐条验收新版的三处硬约束，避免「假 ctx 全绿、装到真机上炸」。
  *
- * 1. 新版保留名 `run_code` 不被注册；
- * 2. `output.schema` 通过新版 `assertSupportedJsonSchema` 校验；
- * 3. `execute(args, exec)` 双参签名 + `exec.signal` 取消语义；
- * 4. 工具名、effect 标签、canonical value 与 `render` 投影一致。
+ * ## 与 `test/plugin-cancel.test.mjs` 的分工（重要）
+ *
+ * 本文件里「取消」那条走的是**真宿主 dispatch**——而真宿主自己就会在 body
+ * 启动前拦下已中止的调用（`ABORTED_BEFORE_DISPATCH`）。也就是说，那条断言
+ * 证明的是**宿主**的行为，删掉插件自己的 `throwIfAborted()` 它依然全绿。
+ * **插件侧取消护栏的证据在 `test/plugin-cancel.test.mjs`**（直接调工具体、
+ * 统计 `callTool` 调用数）。这里保留宿主侧断言，是为了确认插件与宿主语义
+ * 不冲突，而不是把它当插件护栏的证明。
  *
  * 依赖不可用时自动跳过（本仓库把 DSH 声明为可选 peer，离线环境仍可跑其余测试）。
  */
@@ -27,7 +31,7 @@ beforeAll(async () => {
     ({ Context } = await import('@deepseek-ai/cordis'));
     ToolRuntime = (await import('@deepseek-ai/dsh-tools')).default;
     SystemPrompt = (await import('@deepseek-ai/dsh-system-prompt')).default;
-    ({ apply, loadProfile } = await import('../src/plugin.js'));
+    ({ apply, loadProfile } = await import('../src/plugin.ts'));
     // 期望清单来自唯一事实来源（MCP 工具表），不硬编码
     const { TOOLS, GAME_TOOLS } = await import('@openliulan/mcp-server');
     EXPECTED_TOOLS = [...TOOLS, ...(GAME_TOOLS ?? [])].map((t) => `browser_${t.name}`).sort();
@@ -60,18 +64,16 @@ describe.runIf(true)('DSH 真实宿主兼容性', () => {
     expect(names.length).toBeGreaterThanOrEqual(8);
   });
 
-  it('识别新版 DSH 版本线（mode 取值含 ptc）', async () => {
+  it('识别新版 DSH 版本线（mode 取值含 ptc 或 code）', async () => {
     if (!available) return;
     await mount();
     const profile = loadProfile('browser');
     expect(profile).toBeDefined();
-    // 旧版宿主上为 legacy，新版为 modern；两者都不得是 unknown
     expect(['modern', 'legacy']).toContain(profile.host.flavor);
     expect(profile.tools.length).toBe(EXPECTED_TOOLS.length);
-    expect(profile.schemaChecks).toEqual([]);
   });
 
-  it('parameters 是受支持子集（object 根 + 显式 additionalProperties）', async () => {
+  it('parameters 是受支持子集（object 根 + 仅白名单 keyword）', async () => {
     if (!available) return;
     const { tools } = await mount();
     for (const schema of tools.schemas()) {
@@ -80,7 +82,6 @@ describe.runIf(true)('DSH 真实宿主兼容性', () => {
         expect(['type', 'properties', 'required', 'additionalProperties', 'items', 'enum', 'const', 'oneOf', 'description', 'title'],
           `${schema.name} 含不受支持的 keyword: ${key}`).toContain(key);
       }
-      // required 的每一项都必须落在 properties 内，否则新版直接拒绝
       for (const name of schema.parameters.required ?? []) {
         expect(Object.keys(schema.parameters.properties ?? {}), `${schema.name}.required`).toContain(name);
       }
@@ -97,15 +98,13 @@ describe.runIf(true)('DSH 真实宿主兼容性', () => {
       signal: new AbortController().signal,
     });
     expect(result.isError).toBe(false);
-    // canonical value 必须满足 output.schema（真实 ToolRuntime 已做强制校验）
     expect(Array.isArray(result.value.content)).toBe(true);
     expect(typeof result.value.content[0].text).toBe('string');
-    // render 投影为模型内容块
     expect(result.content[0].type).toBe('text');
     expect(result.content[0].text).toContain('防检测');
   });
 
-  it('execute 尊重 exec.signal：已取消时不触达工具体', async () => {
+  it('宿主 dispatch 层会拦下已中止的调用（宿主行为，非插件护栏证据）', async () => {
     if (!available) return;
     const { tools } = await mount();
     const ac = new AbortController();
@@ -117,21 +116,10 @@ describe.runIf(true)('DSH 真实宿主兼容性', () => {
       signal: ac.signal,
     });
     expect(result.isError).toBe(true);
+    expect(result.error?.info?.code).toBe('ABORTED_BEFORE_DISPATCH');
   });
 
-  it('拒绝注册 DSH 保留名 run_code', async () => {
-    if (!available) return;
-    const { ctx, tools } = await mount();
-    // prefix='run' + 工具名 'code' 组合出 run_code；但本插件无 'code' 工具，
-    // 故直接用 prefix='run_code' 断言「任何以保留名结尾的组合都被拒绝」不可靠，
-    // 改为直接验证注册期护栏函数对保留名的判定。
-    const { assertNotReserved } = await import('../src/plugin.js');
-    expect(() => assertNotReserved('run_code')).toThrow(/保留名/);
-    expect(() => assertNotReserved('browser_observe')).not.toThrow();
-    void ctx; void tools;
-  });
-
-  it('卸载插件后工具全部回收（effect disposer 生效）', async () => {
+  it('卸载插件后工具全部回收，且加载画像同步清理', async () => {
     if (!available) return;
     const root = new Context();
     root.plugin(SystemPrompt, {});
@@ -141,8 +129,10 @@ describe.runIf(true)('DSH 真实宿主兼容性', () => {
     const scope = root.plugin((c) => apply({ tools, effect: (fn, label) => c.effect(fn, label) }, { prefix: 'browser' }));
     await new Promise((r) => setTimeout(r, 20));
     expect(tools.schemas().length).toBe(EXPECTED_TOOLS.length);
+    expect(loadProfile('browser'), '装载后画像应存在').toBeDefined();
     scope.dispose();
     await new Promise((r) => setTimeout(r, 50));
     expect(tools.schemas().length).toBe(0);
+    expect(loadProfile('browser'), '卸载后画像应被清理，否则重载会读到陈旧画像').toBeUndefined();
   });
 });

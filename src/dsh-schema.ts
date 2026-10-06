@@ -7,16 +7,23 @@
  * **不支持或位置错放的 keyword 会直接拒绝**（`assertSupportedJsonSchema`
  * 抛 `JsonSchemaError`），而不是被静默忽略。
  *
- * 新版 DSH（dsh-tools 0.1.6）在 `ToolRuntime.register()` 里对
+ * 新版 DSH（dsh-tools 0.1.6 线）在 `ToolRuntime.register()` 里对
  * `output.schema` 执行该校验，并在每次返回后按 `output.schema`
- * 校验 canonical value；参数 schema 则由注册方保证。
+ * 校验 canonical value。
  *
- * 本模块因此承担两件事：
- * 1. **规范化**：把 MCP 侧宽松的 `inputSchema` / 输出 schema 压平为
- *    受支持子集（丢弃未知 keyword，补全 `additionalProperties` 布尔位）。
- * 2. **自检**：在注册前对 schema 做一次同构校验，把违规项以
- *    `openliulan.schema.<tool>` 的 effect 标签暴露出来，避免「装上了但
- *    调用即报错」——这是 ISSUE #33「适配新版」里最容易踩空的一环。
+ * 本模块承担三件事：
+ * 1. **规范化**（{@link normalizeSchema}）：把 MCP 侧宽松的 `inputSchema`
+ *    压平为受支持子集——丢弃未知 keyword、把 `required` 收敛到 `properties`
+ *    之内、强制对象根。**不擅自加严**：作者没声明
+ *    `additionalProperties` 时保持「未声明 = 宽松」，与 MCP 侧声明一致。
+ * 2. **结构自检**（{@link checkSupportedSchema}）：注册前对 schema 本身
+ *    做一次受支持子集校验（对齐宿主 `assertSupportedJsonSchema` 的判定），
+ *    违规项写入加载画像并让插件**加载失败**，避免「装上了但调用即炸」。
+ * 3. **值自检**（{@link validateAgainstSchema}）：按 schema 校验一个值。
+ *    判定语义与宿主 `validateJsonSchemaValue` **对齐**（含 lossless JSON
+ *    边界：拒绝 `undefined` / 非有限数 / `-0` / 稀疏数组 / 非普通原型），
+ *    由 `test/dsh-schema.test.mjs` 以真实宿主为 oracle 做差分回归。
+ *    诊断文案不追求与宿主逐字一致。
  *
  * @module @openliulan/dsh-openliulan/dsh-schema
  */
@@ -35,12 +42,94 @@ export interface SupportedSchemaNode {
   title?: string;
 }
 
+const SCHEMA_TYPES = new Set(["object", "array", "string", "number", "integer", "boolean", "null"]);
 const SCALAR_TYPES = new Set(["string", "number", "integer", "boolean", "null"]);
-const KNOWN_TYPES = new Set([...SCALAR_TYPES, "object", "array"]);
+const CONSTRAINT_KEYWORDS = new Set([
+  "type",
+  "oneOf",
+  "properties",
+  "required",
+  "additionalProperties",
+  "items",
+  "enum",
+  "const",
+]);
+const ANNOTATION_KEYWORDS = new Set(["description", "title", "default", "examples"]);
+/** 与 `oneOf` 互斥的兄弟 keyword（宿主 `ONE_OF_SIBLING_KEYWORDS`）。 */
+const ONE_OF_SIBLING_KEYWORDS = ["properties", "required", "additionalProperties", "items", "enum", "const"];
 
 /** 判断是否为可下钻的普通对象（排除数组与 null）。 */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * 是否为普通记录（判定语义对齐宿主 `isPlainJsonRecord`）：
+ * 原型为 `null` 或 `Object.prototype`，排除类实例 / `Date` / `Map` 等。
+ */
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === null || prototype === Object.prototype;
+}
+
+/** 标量是否与声明的 type 匹配（宿主 `scalarMatches`）。 */
+function scalarMatches(type: string, value: unknown): boolean {
+  switch (type) {
+    case "string":
+      return typeof value === "string";
+    case "number":
+      return typeof value === "number" && Number.isFinite(value) && !Object.is(value, -0);
+    case "integer":
+      return typeof value === "number" && Number.isFinite(value) && !Object.is(value, -0) && Number.isInteger(value);
+    case "boolean":
+      return typeof value === "boolean";
+    case "null":
+      return value === null;
+    default:
+      return false;
+  }
+}
+
+/**
+ * 是否为 lossless JSON 值（判定语义对齐宿主的 `isJsonValue`）。
+ *
+ * 拒绝：`undefined` / 函数 / symbol / bigint / 非有限数 / `-0` / 稀疏数组 /
+ * 非普通原型对象 / 循环引用。宿主在值校验的 object / array / 无 type 节点
+ * 上都会做这道检查，本模块必须一致，否则自检会比宿主宽松而漏报。
+ */
+export function isLosslessJson(value: unknown): boolean {
+  const ancestors = new Set<object>();
+  const walk = (current: unknown): boolean => {
+    if (current === null) return true;
+    const kind = typeof current;
+    if (kind === "string" || kind === "boolean") return true;
+    if (kind === "number") return Number.isFinite(current as number) && !Object.is(current, -0);
+    if (kind !== "object") return false;
+    const node = current as object;
+    if (ancestors.has(node)) return false;
+    ancestors.add(node);
+    try {
+      const prototype = Object.getPrototypeOf(node);
+      if (Array.isArray(node)) {
+        if (prototype !== Array.prototype) return false;
+        if (Reflect.ownKeys(node).length !== node.length + 1) return false;
+        for (let index = 0; index < node.length; index++) {
+          if (!Object.hasOwn(node, index) || !walk((node as unknown[])[index])) return false;
+        }
+        return true;
+      }
+      if (prototype !== Object.prototype && prototype !== null) return false;
+      for (const key of Reflect.ownKeys(node)) {
+        if (typeof key !== "string" || !Object.prototype.propertyIsEnumerable.call(node, key)) return false;
+        if (!walk((node as Record<string, unknown>)[key])) return false;
+      }
+      return true;
+    } finally {
+      ancestors.delete(node);
+    }
+  };
+  return walk(value);
 }
 
 /**
@@ -51,7 +140,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * - 对象节点若声明了 `properties`，则把 `required` 收敛为
  *   「既在 properties 里、又在原 required 里」的名字——DSH 要求
  *   `required` 的每一项都必须出现在 `properties` 中。
- * - `additionalProperties` 显式为布尔；数组 `items` 缺省视为任意 JSON。
+ * - `additionalProperties` **只在作者显式声明布尔值时保留**；未声明则
+ *   不写该 keyword，保持「未声明 = 宽松」的原始语义。此前实现无条件写成
+ *   `false`，等于把宽松的 MCP `inputSchema` 静默加严为「拒绝额外参数」，
+ *   与声明不一致，已修正。
+ * - 数组 `items` 缺省视为任意 JSON。
  *
  * @param raw - MCP 侧原始 schema（宽松结构）。
  * @returns 受支持的 schema 节点；无法识别时返回 `{}`（任意 JSON）。
@@ -66,7 +159,7 @@ export function normalizeSchema(raw: unknown): SupportedSchemaNode {
 
   // oneOf 优先：与 type 互斥。
   if (Array.isArray(raw.oneOf) && raw.oneOf.length > 0) {
-    const branches = raw.oneOf.map((b) => normalizeSchema(b));
+    const branches = raw.oneOf.map((branch) => normalizeSchema(branch));
     if (branches.length >= 2) {
       out.oneOf = branches;
       return out;
@@ -77,7 +170,7 @@ export function normalizeSchema(raw: unknown): SupportedSchemaNode {
 
   const declaredType = typeof raw.type === "string" ? raw.type : undefined;
 
-  if (declaredType !== undefined && KNOWN_TYPES.has(declaredType)) {
+  if (declaredType !== undefined && SCHEMA_TYPES.has(declaredType)) {
     out.type = declaredType as SupportedSchemaNode["type"];
   }
 
@@ -119,98 +212,244 @@ export function normalizeSchema(raw: unknown): SupportedSchemaNode {
       : [];
     if (names.length > 0) out.required = names;
 
-    // 嵌套对象显式声明开闭；根节点若为对象亦显式声明。
-    out.additionalProperties = raw.additionalProperties === true;
+    // 只在作者显式声明布尔值时保留，不擅自加严为 false。
+    if (typeof raw.additionalProperties === "boolean") out.additionalProperties = raw.additionalProperties;
   }
 
   return out;
 }
 
 /**
+ * 校验一个 schema 是否落在受支持子集内（对齐宿主 `assertSupportedJsonSchema`）。
+ *
+ * 这是**注册期自检**的正确输入：schema 本身是静态数据，可在此判定；而
+ * canonical value 只能在运行时有值，故不在此处假装校验常量。
+ *
+ * @param schema - 待校验的原始 schema。
+ * @param path - 诊断路径前缀。
+ * @returns 违规描述列表；空数组代表通过。
+ */
+export function checkSupportedSchema(schema: unknown, path = "schema"): string[] {
+  const violations: string[] = [];
+  const seen = new Set<unknown>();
+  const walk = (node: unknown, at: string): void => {
+    if (!isRecord(node)) {
+      violations.push(`${at} must be a schema object`);
+      return;
+    }
+    if (seen.has(node)) {
+      violations.push(`${at} is circular`);
+      return;
+    }
+    seen.add(node);
+    try {
+      for (const key of Object.keys(node)) {
+        if (CONSTRAINT_KEYWORDS.has(key)) continue;
+        if (ANNOTATION_KEYWORDS.has(key)) {
+          if (!isLosslessJson(node[key])) violations.push(`${at}.${key} annotation must be lossless JSON data`);
+          continue;
+        }
+        violations.push(
+          `${at}.${key} is not a supported keyword (subset: type/oneOf/properties/required/additionalProperties/items/enum/const + annotations)`,
+        );
+      }
+      if (Object.hasOwn(node, "description") && typeof node.description !== "string") {
+        violations.push(`${at}.description must be a string`);
+      }
+      if (Object.hasOwn(node, "title") && typeof node.title !== "string") {
+        violations.push(`${at}.title must be a string`);
+      }
+
+      const hasType = Object.hasOwn(node, "type");
+      const hasOneOf = Object.hasOwn(node, "oneOf");
+      if (hasType && hasOneOf) {
+        violations.push(`${at} cannot declare both type and oneOf`);
+        return;
+      }
+      if (!hasType && !hasOneOf) {
+        for (const key of ONE_OF_SIBLING_KEYWORDS) {
+          if (Object.hasOwn(node, key)) violations.push(`${at}.${key} requires type or oneOf`);
+        }
+        return;
+      }
+
+      if (hasOneOf) {
+        for (const key of ONE_OF_SIBLING_KEYWORDS) {
+          if (Object.hasOwn(node, key)) violations.push(`${at}.${key} is not supported beside oneOf`);
+        }
+        const oneOf = node.oneOf;
+        if (!Array.isArray(oneOf) || oneOf.length < 2) {
+          violations.push(`${at}.oneOf must be an array of at least two schemas`);
+          return;
+        }
+        oneOf.forEach((branch, index) => walk(branch, `${at}.oneOf[${index}]`));
+        return;
+      }
+
+      const type = node.type;
+      if (typeof type !== "string" || !SCHEMA_TYPES.has(type)) {
+        violations.push(
+          Array.isArray(type)
+            ? `${at}.type must be a single type string (type arrays are not supported)`
+            : `${at}.type must be one of ${[...SCHEMA_TYPES].join("/")}`,
+        );
+        return;
+      }
+
+      const allowedFor: Record<string, string[]> = {
+        properties: ["object"],
+        required: ["object"],
+        additionalProperties: ["object"],
+        items: ["array"],
+        enum: ["string", "number", "integer", "boolean", "null"],
+        const: ["string", "number", "integer", "boolean", "null"],
+      };
+      for (const [key, types] of Object.entries(allowedFor)) {
+        if (Object.hasOwn(node, key) && !types.includes(type)) {
+          violations.push(`${at}.${key} is not supported on type "${type}"`);
+        }
+      }
+
+      switch (type) {
+        case "object": {
+          if (Object.hasOwn(node, "properties")) {
+            if (!isRecord(node.properties)) {
+              violations.push(`${at}.properties must be an object of schemas`);
+            } else {
+              for (const [key, child] of Object.entries(node.properties)) {
+                walk(child, `${at}.properties.${key}`);
+              }
+            }
+          }
+          if (Object.hasOwn(node, "required")) {
+            const required = node.required;
+            if (!Array.isArray(required) || required.some((entry) => typeof entry !== "string")) {
+              violations.push(`${at}.required must be an array of strings`);
+            } else {
+              const declared = isRecord(node.properties) ? node.properties : {};
+              for (const key of required) {
+                if (!Object.hasOwn(declared, key)) violations.push(`${at}.required names "${key}" which is not in properties`);
+              }
+            }
+          }
+          if (Object.hasOwn(node, "additionalProperties") && typeof node.additionalProperties !== "boolean") {
+            violations.push(`${at}.additionalProperties must be a boolean`);
+          }
+          return;
+        }
+        case "array": {
+          if (Object.hasOwn(node, "items")) walk(node.items, `${at}.items`);
+          return;
+        }
+        default: {
+          if (Object.hasOwn(node, "enum")) {
+            const allowed = node.enum;
+            const valid =
+              Array.isArray(allowed) && allowed.length > 0 && allowed.every((entry) => scalarMatches(type, entry));
+            if (!valid) violations.push(`${at}.enum must be a non-empty array of ${type} values`);
+          }
+          if (Object.hasOwn(node, "const")) {
+            const declared = node.const;
+            if (!scalarMatches(type, declared)) {
+              violations.push(`${at}.const must be a ${type} value`);
+            } else if (Array.isArray(node.enum) && node.enum.length > 0 && !node.enum.includes(declared)) {
+              violations.push(`${at}.const must be one of ${at}.enum when both are declared`);
+            }
+          }
+          return;
+        }
+      }
+    } finally {
+      seen.delete(node);
+    }
+  };
+  walk(schema, path);
+  return violations;
+}
+
+/**
  * 校验一个值是否满足 {@link SupportedSchemaNode} 的判定语义。
  *
- * 与 DSH 的 `validateJsonSchemaValue` 同构（只覆盖受支持子集），
- * 用于注册期自检与输出值回归断言，不依赖 DSH 内部实现。
+ * 判定与 DSH 的 `validateJsonSchemaValue` 对齐（只覆盖受支持子集），
+ * 用于输出值回归断言，不依赖 DSH 内部实现；**诊断文案不保证逐字一致**。
+ * 对齐点：`type` 判定先于 `enum` / `const`；`undefined`、非有限数、`-0`、
+ * 稀疏数组、非普通原型对象按 lossless JSON 边界拒绝。
  *
  * @param schema - 已规范化的 schema。
  * @param value - 待校验的值。
  * @param path - 诊断路径前缀。
  * @returns 违规描述列表；空数组代表通过。
  */
-export function validateAgainstSchema(
-  schema: SupportedSchemaNode,
-  value: unknown,
-  path = "value",
-): string[] {
-  const violations: string[] = [];
-
+export function validateAgainstSchema(schema: SupportedSchemaNode, value: unknown, path = "value"): string[] {
   if (schema.oneOf !== undefined) {
     const matched = schema.oneOf.filter((branch) => validateAgainstSchema(branch, value, path).length === 0);
-    if (matched.length !== 1) {
-      violations.push(`"${path}" must match exactly one oneOf branch (matched ${matched.length})`);
-    }
-    return violations;
+    return matched.length === 1 ? [] : [`"${path}" must match exactly one oneOf branch (matched ${matched.length})`];
   }
 
-  if (schema.const !== undefined && value !== schema.const) {
-    violations.push(`"${path}" must be ${JSON.stringify(schema.const)}`);
-    return violations;
+  // 无 type 的注解式节点：只要求是 lossless JSON。
+  if (schema.type === undefined) {
+    return isLosslessJson(value) ? [] : [`"${path}" must be a lossless JSON value`];
   }
-  if (schema.enum !== undefined && !schema.enum.includes(value as string | number | boolean | null)) {
-    violations.push(`"${path}" must be one of ${JSON.stringify(schema.enum)}`);
-    return violations;
-  }
+
+  const enumViolation = (): string[] => {
+    if (schema.enum !== undefined && !schema.enum.includes(value as string | number | boolean | null)) {
+      return [`"${path}" must be one of ${JSON.stringify(schema.enum)}`];
+    }
+    if (schema.const !== undefined && value !== schema.const) {
+      return [`"${path}" must be ${JSON.stringify(schema.const)}`];
+    }
+    return [];
+  };
 
   switch (schema.type) {
-    case undefined:
-      return violations;
     case "null":
-      if (value !== null) violations.push(`"${path}" must be null`);
-      return violations;
+      return value === null ? enumViolation() : [`"${path}" must be null`];
     case "boolean":
-      if (typeof value !== "boolean") violations.push(`"${path}" must be boolean`);
-      return violations;
+      return typeof value === "boolean" ? enumViolation() : [`"${path}" must be a boolean`];
     case "string":
-      if (typeof value !== "string") violations.push(`"${path}" must be string`);
-      return violations;
+      return typeof value === "string" ? enumViolation() : [`"${path}" must be a string`];
     case "number":
-      if (typeof value !== "number" || !Number.isFinite(value)) violations.push(`"${path}" must be a finite number`);
-      return violations;
+      if (typeof value !== "number") return [`"${path}" must be a number`];
+      return Number.isFinite(value) && !Object.is(value, -0) ? enumViolation() : [`"${path}" must be a finite JSON number`];
     case "integer":
-      if (typeof value !== "number" || !Number.isInteger(value)) violations.push(`"${path}" must be an integer`);
-      return violations;
+      return typeof value === "number" && Number.isFinite(value) && !Object.is(value, -0) && Number.isInteger(value)
+        ? enumViolation()
+        : [`"${path}" must be an integer`];
     case "array": {
-      if (!Array.isArray(value)) {
-        violations.push(`"${path}" must be an array`);
-        return violations;
-      }
+      if (!Array.isArray(value)) return [`"${path}" must be an array`];
+      const violations: string[] = [];
       if (schema.items !== undefined) {
         value.forEach((item, i) => violations.push(...validateAgainstSchema(schema.items!, item, `${path}[${i}]`)));
       }
-      return violations;
+      // 与宿主一致：items 违规优先于 lossless 边界（稀疏数组由 lossless 兜底）。
+      if (violations.length > 0) return violations;
+      return isLosslessJson(value) ? [] : [`"${path}" must be a dense lossless JSON array`];
     }
     case "object": {
-      if (!isRecord(value)) {
-        violations.push(`"${path}" must be an object`);
-        return violations;
-      }
+      if (!isPlainRecord(value)) return [`"${path}" must be an object`];
       const props = schema.properties ?? {};
+      const violations: string[] = [];
       for (const name of schema.required ?? []) {
-        if (!Object.hasOwn(value, name)) violations.push(`"${path}.${name}" is required`);
+        if (!Object.hasOwn(value, name) || value[name] === undefined) {
+          violations.push(`missing required property "${path}.${name}"`);
+        }
       }
       if (schema.additionalProperties === false) {
         for (const key of Object.keys(value)) {
-          if (!Object.hasOwn(props, key)) violations.push(`"${path}.${key}" is not a declared property`);
+          if (!Object.hasOwn(props, key)) {
+            violations.push(`"${path}.${key}" is not a declared property (additionalProperties: false)`);
+          }
         }
       }
       for (const [key, child] of Object.entries(props)) {
-        if (Object.hasOwn(value, key)) {
+        if (Object.hasOwn(value, key) && value[key] !== undefined) {
           violations.push(...validateAgainstSchema(child, value[key], `${path}.${key}`));
         }
       }
-      return violations;
+      if (violations.length > 0) return violations;
+      return isLosslessJson(value) ? [] : [`"${path}" must be a lossless JSON object`];
     }
     default:
-      return violations;
+      return [];
   }
 }

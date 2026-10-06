@@ -28,16 +28,9 @@
 - 只有 `mode` 的取值字面量与运行时服务名变了，**插件侧无感**（插件不声明
   `mode`，由用户在自己的 profile 里配）。
 
-## 2. 新版对插件的三条硬约束
+## 2. 新版对插件的约束与处置
 
-### 2.1 `run_code` 是保留工具名
-
-新旧两版都在 `register()` 里拒绝 `name === 'run_code'`。本插件所有工具都带
-`prefix`（默认 `browser`），并从命名上规避；同时提供显式护栏
-`assertNotReserved()`，让冲突在**注册前**以「prefix 选得不对」的措辞报出，
-而不是让用户去看宿主的内部错误。
-
-### 2.2 `output.schema` 受强制 JSON Schema 子集校验
+### 2.1 schema 受强制 JSON Schema 子集校验（硬约束）
 
 `register()` 会对 `output.schema` 执行 `assertSupportedJsonSchema()`，
 **不支持或位置错放的 keyword 直接拒绝**（不是静默忽略）。受支持子集为：
@@ -53,16 +46,50 @@
 > 直接手写 `type: 'json'` 到 `output.schema` 会被拒绝。
 
 本插件通过 `src/dsh-schema.ts` 的 `normalizeSchema()` 把 MCP 侧宽松
-`inputSchema` 压平为上述子集，并在注册前用 `validateAgainstSchema()`
-对每枚工具的 canonical value 契约逐一自检；违规结果写入加载画像
-（`loadProfile().schemaChecks`），不会变成「装上了但调用即炸」。
+`inputSchema` 与输出 schema 压平为上述子集，并在注册前用
+`checkSupportedSchema()` 对**真实的 parameters / output.schema** 做结构自检：
+违规即抛错、插件加载失败——比「装上了但调用即炸」可诊断得多。
 
-### 2.3 `execute(args, exec)` 必须尊重 `exec.signal`
+**不擅自加严**：作者未声明 `additionalProperties` 时，规范化结果**不写**该
+keyword，保持「未声明 = 宽松」。此前实现无条件写成 `false`，等于把宽松的 MCP
+`inputSchema` 静默加严为「拒绝额外参数」，且与声明不一致，已修正并由
+`test/dsh-schema.test.mjs` 钉住。
 
-新版明确要求异步工具 observe / forward 取消信号，并在 body 启动后到结果物化前
-的取消窗口上返回 `ABORTED` / `ABORTED_BEFORE_DISPATCH`。本插件在
-`execute` 入口 `exec?.signal?.throwIfAborted()`，已中止的调用不会触达工具体
-（测试覆盖：取消后必须 `isError === true`）。
+### 2.2 `execute(args, exec)` 必须尊重 `exec.signal`（硬约束）
+
+新版要求异步工具响应取消，并在 body 启动前 / 启动后的取消窗口上返回
+`ABORTED_BEFORE_DISPATCH` / `ABORTED`。本插件在 `execute` 入口
+`exec?.signal?.throwIfAborted()`，已中止的调用不会触达工具体
+（浏览器不会被启动）。
+
+**证据分工（重要）**：真宿主 dispatch 层**自己就会**在 body 启动前拦下已中止
+的调用。因此 `test/plugin-dsh-compat.test.mjs` 里那条断言证明的是**宿主**行为，
+删掉插件的 `throwIfAborted()` 它依然全绿。插件侧的有鉴别力证据在
+`test/plugin-cancel.test.mjs`：直接调用工具体（绕过宿主），断言「已中止 →
+`callTool` **零调用**」，并用「未中止 → `callTool` 必须被调用」证明该断言不是恒真。
+
+### 2.3 `run_code` 是保留工具名（**防御性保留**，非硬约束）
+
+新旧两版都在 `register()` 里拒绝 `name === 'run_code'`。
+
+**主防线是命名前缀**：本插件所有工具都带 `prefix`（默认 `browser_`），
+命名上已天然远离保留名。
+
+`assertNotReserved()` 是**防御性保留**，真实调用路径上默认不可达：
+
+```text
+publicName = `${prefix}_${tool.name}`；MCP 工具表里没有名为 `code` 的工具
+prefix="run"        → run_observe       （不是 run_code）
+prefix="run_code"   → run_code_observe  （不是 run_code）
+```
+
+也就是说，除非将来有人往 MCP 里加一枚恰好叫 `code` 的工具，这枚护栏不会命中。
+判定因此同时覆盖 `tool.name` 本身作为兜底。可达性边界由
+`test/plugin-reserved-name.test.mjs` 钉住（既记录「默认不可达」，也断言
+「MCP 侧一旦出现 `code` 工具就必须拦下」）。
+
+> 本项**不当作硬约束宣称**。此前文档把它与另两项并列成「三条硬约束」，
+> 属于「宣称的防线强于实际防线」，已更正。
 
 ## 3. 版本探测
 
@@ -78,47 +105,65 @@
 判定结果（`modern` / `legacy`）通过 `loadProfile(prefix).host` 暴露，供诊断与
 CI 验收读取；`unknown` 时按兼容路径注册（不抛错、不阻断加载）。
 
+`loadProfile()` 返回的画像随插件卸载（effect disposer）同步清理，
+避免同 prefix 重载后读到陈旧画像。
+
 ## 4. 验收方式
 
 ```bash
-npm run test:plugin        # 假 ctx 冒烟：注册清单 + schema + 取消语义 + 产物不内联宿主包
+npm run test:plugin        # 假 ctx 冒烟：注册清单 + 真实 schema 自检 + 产物不内联宿主包
 npm run test:dsh-compat    # 真实宿主双版本验收（隔离临时目录各自安装真实宿主）
-npx vitest run test/plugin-dsh-compat.test.mjs   # 用本仓库 devDependency 的真实 ToolRuntime 验收
+npm run test               # 全量单测（含 schema 差分 oracle、取消鉴别力、构建期体检反证）
+npm run typecheck          # 源码类型检查（离线环境亦可跑）
 ```
 
 `scripts/dsh-compat-check.mjs` 的验收项：
 
 1. 工具全部注册可见，且与插件报告的清单一致（期望清单从 `@openliulan/mcp-server` 的工具表推导，不硬编码）；
 2. 版本线探测结果符合预期（`legacy` / `modern`）；
-3. `schemaChecks` 为空（无 schema 违规）；
+3. schema 结构自检已在注册期强制（违规即 `apply()` 抛错），能走到此处即代表通过；
 4. `execute → output.schema 校验 → render 投影` 全链路跑通；
-5. `exec.signal` 已中止时必须失败；
-6. `run_code` 保留名被拒绝。
+5. 取消语义与宿主一致（宿主 dispatch 的兜底行为，非插件护栏证据）；
+6. `run_code` 保留名被拒绝（防御性保留，默认不可达）。
 
-`scripts/build-plugin.mjs` 另加**构建期体检**：若产物内联了
-`@deepseek-ai/dsh-tools` / `@deepseek-ai/cordis`，构建直接失败——
-把「不得钉死 DSH 版本」变成硬约束而不是口头约定。
+**实测出处**：Node.js `22.23.3` 与 `24.21.0` 上各跑一次
+`node scripts/dsh-compat-check.mjs legacy` 与 `... modern`，两条版本线均输出
+`DSH_COMPAT_OK` 并以 0 退出。
+
+### 构建期体检：产物不得内联宿主包
+
+`scripts/host-inlining-guard.mjs` 把「不得钉死 DSH 版本」变成硬约束。这里踩过
+**两处静默失效**，都已固化为反证用例（`test/build-plugin.test.mjs`）：
+
+1. 判定**不能**用 `result.outputFiles`——它在 `write: true`（本项目实际构建方式）
+   下恒为 `undefined`，分支永不进入；改用 `metafile.inputs`。
+2. 命中后**不能**只 `result.errors.push()`——在 `onEnd` 里往 `errors` 推条目
+   不会让构建失败；必须 `throw`。`metafile` 缺失时同样 `throw`。
+
+`test/build-plugin.test.mjs` 注入一条真实 `@deepseek-ai/cordis` import，
+断言构建**必须失败**——防止体检再次退化成死代码。
 
 ## 5. CI 接入
 
-`.cnb.yml` 在 `main`（push）与 `pull_request` 上各挂一条 `dsh-compat` 任务：
+`.cnb.yml` 在 `main`（push）与 `pull_request` 上各挂两条任务：
 
 ```yaml
-- name: dsh-compat
-  docker:
-    image: node:22
+- name: build-and-test        # 构建（含产物体检）+ 全量测试 + 离目录冒烟
   stages:
-    - name: install
-      script: npm ci
-    - name: build-plugin
-      script: npm run build:plugin
-    - name: legacy-host
-      script: node scripts/dsh-compat-check.mjs legacy
-    - name: modern-host
-      script: node scripts/dsh-compat-check.mjs modern
+    - install:  npm ci
+    - build:    npm run build
+    - test:     npm run test && npm run test:plugin
+- name: dsh-compat            # 真实宿主双版本验收
+  stages:
+    - install:      npm ci
+    - build-plugin: npm run build:plugin
+    - legacy-host:  node scripts/dsh-compat-check.mjs legacy
+    - modern-host:  node scripts/dsh-compat-check.mjs modern
 ```
 
-任一版本线验收失败即返回非零退出码，驱动 CI 红/绿——防止「新版适配」在后续
+`npm run test:plugin` 此前**存在但不在 CI**——插件产物坏了 CI 也不红，本次补齐。
+
+任一验收失败即返回非零退出码，驱动 CI 红/绿——防止「新版适配」在后续
 迭代里静默回归，也防止为了适配新版而反过来把旧版装崩。
 
 ## 6. 工具清单
