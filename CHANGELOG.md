@@ -23,7 +23,7 @@ v1.3.0 完成 ISSUE #33「适配 dsh 新版」：DSH 的 `@deepseek-ai/dsh-tools
 | 版本线探测 | 不导入任何 `@deepseek-ai/dsh-tools` 符号，改用 `ctx.tools.constructor.Config` 的公开投影判定版本线：`mode` 取值含 `ptc` → 新版（modern），含 `code` → 旧版（legacy），无法判定时按兼容路径注册并如实报 `unknown`，不抛错、不阻断加载 |
 | schema 规范化 | 新增 `src/dsh-schema.ts`：把 MCP 侧宽松 `inputSchema` / 输出 schema **按 keyword 白名单收敛**到 DSH 强制的受支持 JSON Schema 子集（`oneOf` 与 `type` 互斥、`required` 必须落在 `properties` 内、强制对象根）。**不丢取值约束、也不做类型一致性修正**——作者声明的 `const` / `enum` 一律原样保留（无论标量还是对象/数组），交给注册期自检拒绝（丢弃它等于静默放宽约束）；**例外**：`oneOf` 节点上的兄弟 keyword 被丢弃（有意的宽松归一，位置维度不受支持，见下）；**也不擅自加严**：作者未声明 `additionalProperties` 时保持「未声明 = 宽松」 |
 | schema 结构自检 | 注册前用 `checkSupportedSchema()` 校验**真实的 parameters / output.schema**；违规即抛错、加载失败，而不是「装上了但调用即炸」 |
-| 值判定差分对齐 | `validateAgainstSchema()` 以真实宿主 `validateJsonSchemaValue` 为 oracle 逐例回归（**24 条值例 + 16 条结构例**，含 `const` / `undefined` / 非有限数 / `-0` / 稀疏数组 / 非普通原型 / `oneOf` 兄弟 keyword / 畸形 `enum` 形状），把「同构」从宣称变成可验证事实。依赖缺失时**硬断言失败**，不再静默空过 |
+| 值判定差分对齐 | `validateAgainstSchema()` 以真实宿主 `validateJsonSchemaValue` 为 oracle 逐例回归（**25 条值例 + 16 条结构例**，含 `const` / `undefined` / 非有限数 / `-0` / 稀疏数组 / 非普通原型 / `oneOf` 兄弟 keyword / 畸形 `enum` 形状；两边判定**不一致**的例子不在语料里，逐条登记在 `KNOWN_DIVERGENCES`），把「同构」从宣称变成可验证事实。依赖缺失时**硬断言失败**，不再静默空过 |
 | `exec.signal` 取消语义 | `execute(args, exec)` 双参签名显式 `throwIfAborted()`：已中止的调用不触达工具体。**有鉴别力的证据**：`test/plugin-cancel.test.mjs` 直接调工具体并统计 `callTool` 零调用（真宿主 dispatch 那条会自己拦下，删掉插件护栏仍全绿，故不作为插件证据） |
 | 类型声明解耦 | 新增 `src/dsh-types.ts`：用本地结构化声明替代 `import type { Context } from '@deepseek-ai/cordis'`，产物与源码都不含宿主包符号；新增 `tsconfig.json` + `npm run typecheck`，离线环境也可类型检查 |
 | 工具清单不硬编码 | 插件与冒烟测试的期望清单都从唯一事实来源 `@openliulan/mcp-server` 的 `TOOLS` / `GAME_TOOLS` 推导，后续批次往 MCP 加工具时插件自动跟随，不会漏注册也测不出「漏注册」 |
@@ -81,7 +81,8 @@ PR #35 复评（第 1 次返工交回）判定必修项清零、放行，并提�
 
 **顺带修正一处计数**：上一版 CHANGELOG 写「22 条值例 + 11 条结构例」，本轮补入
 「非标量 `const` / 非标量 `enum` 元素」两条结构例（差分 oracle 钉住「本仓库与宿主一致拒绝」），
-现为 **22 条值例 + 13 条结构例**（第 2 次复评又补 2 条值例 + 3 条结构例，见下节）。🟡-C 的更正已接受：`963ec97` 那行原本没有计数，
+现为 **22 条值例 + 13 条结构例**（第 2 次复评又补 2 条值例 + 3 条结构例 → 24 + 16；
+第 3 次复评再补 1 条值例 → **25 + 16**，见下节）。🟡-C 的更正已接受：`963ec97` 那行原本没有计数，
 此前「23→22」的过程描述与仓库事实不符，本轮不再复述该说法。
 
 ---
@@ -94,11 +95,37 @@ PR #35 第 2 次复评判定「必修清零、无新增 🔴、`proceed / merge`
 | 项 | 问题 | 处置 |
 | :--- | :--- | :--- |
 | 🟡-G | 新增 docstring / CHANGELOG 写「无论取值是标量还是对象/数组、**也无论位置是否受支持**」——取值那半为真，位置那半为假：`oneOf` 节点的兄弟 keyword（`enum`/`const`/`properties`/`required`/`items`/`additionalProperties`）会被整体丢弃，`{ oneOf:[…], enum:['x'] }` 本模块放行 / 宿主拒绝 | 改口径：把承诺**收回取值维度**，并为位置维度补上例外与实测例。**不改变行为**——丢弃兄弟 keyword 是有意的宽松归一（DSH 子集禁止其与 `oneOf` 共存，真实 schema 却常并写，保留会让插件整体加载失败）。影响面 0（MCP 工具表 `oneOf` 命中 0）。补 3 条结构例 + 3 条专属用例钉住「丢弃 → 归一后放行 / 原样拒绝」，并加宿主差分（原样输入层本模块与宿主一致拒绝） |
-| 🟡-H | `validateAgainstSchema` 新增的 `Array.isArray(schema.enum) &&` 兜底把畸形 enum（`{ enum: { a: 1 } }`）从「抛 TypeError」改成了「静默 PASS」——方向与 🟡-A/🟡-D 相反（fail-open） | 改 **fail-closed**：畸形 `enum` 形状返回违规；空 `enum` 同样判违规。生产路径不可达（注册期自检先拒），但死路径上也宁可报错。补 2 条值例进差分 oracle（宿主对 `{enum:{a:1}}` 也判「不通过」）+ 1 条鉴别力用例（正常 `enum` 行为不变） |
+| 🟡-H | `validateAgainstSchema` 新增的 `Array.isArray(schema.enum) &&` 兜底把畸形 enum（`{ enum: { a: 1 } }`）从「抛 TypeError」改成了「静默 PASS」——方向与 🟡-A/🟡-D 相反（fail-open） | 改 **fail-closed**：畸形 `enum` 形状返回违规。生产路径不可达（注册期自检先拒），但死路径上也宁可报错。补 2 条值例进差分 oracle（宿主对 `{enum:{a:1}}` 也判「不通过」）+ 1 条鉴别力用例（正常 `enum` 行为不变） |
 
-**「无例支撑的全称句式」这个 meta 观察已接受并落到本轮**：新增/改写的每处「一律」
-都配了实测例——`oneOf` 兄弟丢弃有 6 条用例，`enum` 形状兜底有 3 条，全部经变异验证
-（把实现改回旧行为 → 对应用例立刻红）。
+**「无例支撑的全称句式」这个 meta 观察已接受并落到本轮**，但本轮的「全部经变异验证」
+**说得过头了**（第 3 次复评 🟡-J 实测反证，见下节）：`oneOf` 兄弟 keyword 的 3 条
+`SCHEMA_CASES` 只钉「**原样**被拒」，不钉「归一后丢弃」；专属用例的 body 又只放了
+`enum`。于是「在归一分支里加回 `const` / `type`」两个变异**全绿**——`const` / `type`
+当时无例支撑。第 3 次复评已修（专属用例改成 7 个 keyword 的循环，两个变异立刻红）。
+
+---
+
+## 修复 · v1.3.0 补丁 — 复评（第 3 次）处置：钉住丢弃、删冗余项、补非对象根护栏（2026-10-07）
+
+PR #35 第 3 次复评判定「0 🔴、必修清零、放行」，另提 4 条 🟡（均不阻塞）。
+本轮**四条全修**（不修也放行，但其中两条是「宣称强于事实」，留着会继续误导）。
+复现环境：Node `22.23.3` + `npm ci`，另装 Playwright Chromium 以复现 200 例。
+
+| 项 | 问题（复评实测） | 处置 |
+| :--- | :--- | :--- |
+| 🟡-I | `enum.length === 0 ||` 是**冗余项**：旧代码 `Array.isArray(enum) && !enum.includes(v)` 对 `enum: []` 本就返回违规（`[].includes()` 恒 false）。删掉该 disjunct → 全量全绿（**等价变异 SURVIVED**）；新增的 `it('空 enum 也判违规')` 改动前后都绿 = **零鉴别力**。CHANGELOG 把「空 enum 同样判违规」列为本轮修复，属夸大 | 删冗余分支 + 删零鉴别力用例；改为把「空 enum」作为**语料**放进差分 oracle（`VALUE_CASES` 25 条），钉住行为本身；CHANGELOG 该行不再声称「修复」 |
+| 🟡-J | `it('oneOf 兄弟 enum / const 被整体丢弃…')` 的 body 只放了 `enum`，`const` / `type` **无例支撑**。变异：在 `branches.length >= 2` 里加回 `if (raw.const !== undefined) out.const = raw.const;` → **全绿**（`type` 同）。故 CHANGELOG「6 条用例 / 全部经变异验证」不成立——`SCHEMA_CASES` 那 3 条只钉「原样被拒」，不钉「归一丢弃」 | 专属用例改成对 **7 个兄弟 keyword**（`type`/`enum`/`const`/`properties`/`required`/`items`/`additionalProperties`）的循环；两个变异（`const` / `type`）**立刻红**（实测各 1 failed）。CHANGELOG meta 段如实承认上轮说法过头 |
+| 🟡-K | 生产路径根部 `oneOf` 是**静默放宽**，不是「位置不受支持」：`plugin.ts` 读 `normalized.properties ?? {}`，`inputSchema = {oneOf:[…]}` → 注册出 `parameters = {type:'object',properties:{}}`，`checkSupportedSchema` **放行**、工具变成「收任意参数」。docstring 给的理由（保留会让插件整体加载失败）**在该位置不成立** | 加**压平护栏**（注册**之前**抛，不压成空对象）。**覆盖整类，不止点名的 `oneOf`**：判据是「作者在**根**上声明了 `parameters` 表达不了的约束」，故看 **raw** 而非只看 normalized（`items` 在归一里就被丢了，只看 normalized 会漏 `{type:'object',items:…}`）。同类实测：`{type:'object',enum:['x']}` 是对象根、逃得过只看 `oneOf` 的护栏，约束照样被丢，宿主对原样输入同样拒绝。新增 `test/plugin-object-root.test.mjs`：会被压平的输入必抛且**抛前零注册**；纯对象根照常注册且**原约束不被压平**（变异：整段关掉 → 3 failed；收窄成只看 `oneOf` → 1 failed） |
+| 🟡-L | `{enum:'abc'}` 上本模块判违规、宿主 **PASS**（宿主退化成 `String.prototype.includes`）——**真分歧**，但只写在 `src/dsh-schema.ts` 注释里。`docs/dsh-compat.md` 仍讲「以真实宿主为 oracle 逐例回归、把同构变成可验证事实」，而语料的筛选口径（只收两边一致的例子）没写出来 | 新增 `KNOWN_DIVERGENCES` 登记表（含双向断言：本模块必拒 / 宿主必放行，宿主改行为则本表红），`docs/dsh-compat.md` 写明**语料筛选口径**与「已知分歧（有意更严）」。没有这张表，「逐例一致」有一半是筛出来的 |
+
+**顺带更正一处计数分歧**：上轮提交信息写「把 enum 兜底改回 `Array.isArray &&` → 差分 + 兜底共 **3 failed**」。
+复评复跑为 **2 failed**（差分 1 + 兜底 1），本轮在 `93bbf9f` 语料上复现也是 **2 failed**——
+提交信息写错了，已更正。（修完本轮后同一变异为 3 failed，多出的那条是新增的 `KNOWN_DIVERGENCES` 断言，属新增覆盖而非原数。）
+
+**自测（本轮）**：`npm run test` → **203 passed / 0 skipped**（21 文件；装 Chromium 后 `real-browser` 5 例真跑，未装则 198 passed / 5 skipped）；
+`typecheck` 0 错；`test:plugin` `SMOKE_OK tools=8`；`test:dsh-compat` legacy + modern 均 `DSH_COMPAT_OK`；
+`build:plugin` 重建 `lib/index.js` 逐字节一致。变异验证：`const`/`type` 兄弟保留各 1 failed，
+`enum` 兜底改回 fail-open 3 failed，空 enum 冗余项删/加均全绿（如实记为**等价变异**，不是鉴别力）；压平护栏整段关掉 3 failed、收窄成只看 `oneOf` 1 failed。
 
 ---
 

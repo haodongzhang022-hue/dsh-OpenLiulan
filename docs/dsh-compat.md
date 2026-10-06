@@ -72,9 +72,43 @@ assertSupportedJsonSchema(raw) → REJECT: schema.enum is not supported beside o
 ```
 
 **丢弃只发生在归一之后**：本模块自检与宿主对**原样** schema 的判定一致（都拒绝）。
-同一族还有 `const` / `properties` / `required` / `items` / `additionalProperties`。
-影响面 0——当前 MCP 工具表里 `oneOf` 命中 0（8/8 工具无此写法）。行为由
-`test/dsh-schema.test.mjs` 钉住。
+同一族 7 个 keyword 全列（`type` / `enum` / `const` / `properties` / `required` /
+`items` / `additionalProperties`），由 `test/dsh-schema.test.mjs` 以循环钉住——
+只放 `enum` 会让 `const` / `type` 无例支撑（变异「加回 `const` 兄弟」当时全绿）。
+
+**例外之外还有一处 fail-open，已加护栏（压平丢失）**：上面那条例外说的是
+`oneOf` **节点上的兄弟 keyword**——丢弃它是有意的（保留会让插件整体加载失败）。
+但 `plugin.ts` 构造 `parameters` 时只从 normalized 取
+`properties` / `required` / `additionalProperties`，**根上其它约束一律被压平丢掉**：
+
+```text
+inputSchema = { oneOf:[{type:'string'},{type:'number'}] }
+normalize   = { oneOf:[{type:'string'},{type:'number'}] }
+parameters  = { type:'object', properties:{} }     ← 整个取值约束被压掉
+checkSupportedSchema(parameters) = []              ← 注册期自检放行
+```
+
+工具会**注册成功但变成「收任意参数」**——这里丢的不是「位置不受支持的写法」，
+而是**整个取值约束**，且不会像兄弟 keyword 那样让加载失败。因此 `plugin.ts` 现在
+在构造 `parameters` **之前**加护栏，判据是「作者在**根**上声明了 `parameters`
+表达不了的约束」：
+
+| 输入 | 原样 schema 的宿主判定 | 压平后 | 护栏 |
+| :--- | :--- | :--- | :--- |
+| `{ oneOf:[…] }` | REJECT | 丢整个 `oneOf` | 抛 |
+| `{ type:'string' }` / `{ type:'array', items:… }` | REJECT（根非对象） | 丢 `type` / `items` | 抛 |
+| `{ type:'object', enum:['x'] }` | REJECT | 丢 `enum` | 抛（**对象根，只看 `oneOf` 会漏**） |
+| `{ type:'object', const:{…} }` | REJECT | 丢 `const` | 抛 |
+| `{ type:'object', properties:… }` | PASS | 无丢失 | 照常注册 |
+
+护栏**看 raw 而非只看 normalized**：`items` 这类 keyword 在 `normalizeSchema` 里就
+被丢掉了（只在 `type:'array'` 下保留），只看 normalized 会漏
+`{ type:'object', items:… }`。
+
+影响面：8/8 工具都是 `{ type:'object', properties }`，今天不可达；MCP 协议本就要求
+对象根，属健壮性。两个方向由 `test/plugin-object-root.test.mjs` 钉住：会被压平的
+输入必抛（且**抛前零注册**），纯对象根照常注册且**原有 `properties` / `required`
+不被压平**。
 
 > 此前的 docstring 写「无论取值…**也无论位置是否受支持**」，位置那半为假——
 > 那正是一句**无例支撑的全称断言**。本轮把承诺收回取值维度，并为位置维度
@@ -146,6 +180,26 @@ npm run test:dsh-compat    # 真实宿主双版本验收（隔离临时目录各
 npm run test               # 全量单测（含 schema 差分 oracle、取消鉴别力、构建期体检反证）
 npm run typecheck          # 源码类型检查（离线环境亦可跑）
 ```
+
+### 语料筛选口径与已知分歧（🟡-L）
+
+「以真实宿主为 oracle 逐例回归、把同构变成可验证事实」这句话，**只在写清筛选口径后才成立**。
+本仓库 `test/dsh-schema.test.mjs` 的语料分两张表：
+
+- `VALUE_CASES` / `SCHEMA_CASES`：**只收两边判定一致的例子**，用来钉住同构；
+- `KNOWN_DIVERGENCES`：两边**不一致**的例子逐条登记，写明「谁更严 / 为什么」。
+
+没有第二张表，第一张表的「逐例一致」就有一半是**筛出来的**——只挑一致的说，不一致的
+留在代码注释里，读者会以为全同构。
+
+当前登记的分歧（有意更严）：
+
+| 例子 | 宿主 | 本模块 | 取向 |
+| :--- | :--- | :--- | :--- |
+| `{ type:'string', enum:'abc' }`，值 `'a'` | **PASS**（退化成 `String.prototype.includes('a')`） | 判 schema 畸形 → 违规 | **有意更严**：畸形声明不该被当成合法约束放行，不模仿宿主的不健全退化 |
+
+登记表带**双向断言**：本模块必须判违规、宿主必须放行。宿主哪天改了行为，该用例立刻红，
+提醒更新此表——避免分歧随宿主升级悄悄变成「未登记的意外」。
 
 `scripts/dsh-compat-check.mjs` 的验收项：
 

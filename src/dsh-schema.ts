@@ -433,12 +433,15 @@ export function validateAgainstSchema(schema: SupportedSchemaNode, value: unknow
     // 不 fail-open」与 🟡-D 的取向一致——此前 `Array.isArray(...) &&` 会把
     // 「抛 TypeError」悄悄改成「PASS」，方向正好相反。
     // 注：宿主对 `{ enum: 'abc' }` 会退化成 `String.prototype.includes`（不健全），
-    // 本模块不模仿该行为，非数组一律判畸形。
+    // 本模块不模仿该行为，非数组一律判畸形——该分歧是**有意的更严**，显式登记在
+    // `test/dsh-schema.test.mjs` 的 `KNOWN_DIVERGENCES`，并写进 `docs/dsh-compat.md`。
+    // 空 `enum` 不需要单列分支：`[].includes(v)` 恒为 false，本就走违规（早先多写的
+    // `length === 0 ||` 是冗余项，删掉后全量仍绿）。
     if (schema.enum !== undefined) {
       if (!Array.isArray(schema.enum)) {
         return [`"${path}" schema.enum is malformed (must be a non-empty array)`];
       }
-      if (schema.enum.length === 0 || !schema.enum.includes(value)) {
+      if (!schema.enum.includes(value)) {
         return [`"${path}" must be one of ${JSON.stringify(schema.enum)}`];
       }
     }

@@ -225,6 +225,33 @@ export function apply(ctx: HostContext, config: Record<string, unknown> = {}): v
     // const/enum 一律原样保留、由下方注册期自检拒绝）。additionalProperties
     // 只在作者显式声明时保留，不擅自加严。
     const normalized = normalizeSchema(tool.inputSchema);
+
+    // 压平护栏（🟡-K）：下面的 `parameters` 只从 normalized 里取
+    // `properties` / `required` / `additionalProperties`，**其余约束 keyword 会被
+    // 静默丢掉**——工具注册成功，却变成「收任意参数」。压平后的 parameters 能通过
+    // 注册期自检，自检看不出丢失，所以必须在这里拦。
+    //
+    // 丢的不是「位置不受支持的写法」（那是 🟡-G：`oneOf` 的兄弟 keyword，保留会让
+    // 插件整体加载失败，且原样 schema 仍被宿主拒绝），而是**整个取值约束**，且保留
+    // 并不会让加载失败——所以这里抛，不静默变宽。
+    //
+    // 覆盖整类而不只是 `oneOf` 根。判据是「作者在**根**上声明了 `parameters`
+    // 表达不了的约束」——看 raw 而不只看 normalized：`items` 这类 keyword 在
+    // normalizeSchema 里就被丢掉了（只在 `type:'array'` 下保留），只看 normalized
+    // 会漏掉 `{ type:'object', items:… }`（宿主对原样输入同样直接拒绝）。
+    // 影响面：8/8 工具都是 `{ type:'object', properties }`，今天不可达；MCP 协议本就
+    // 要求对象根，属健壮性护栏。
+    const ROOT_ONLY_KEYWORDS = ["oneOf", "enum", "const", "items"] as const;
+    const rawInput = (tool.inputSchema ?? {}) as Record<string, unknown>;
+    const dropped = ROOT_ONLY_KEYWORDS.filter((key) => rawInput[key] !== undefined);
+    if (dropped.length > 0 || (normalized.type !== undefined && normalized.type !== "object")) {
+      throw new Error(
+        `[openliulan] ${publicName} inputSchema 的根必须是纯对象 schema（DSH ParameterJsonSchema 要求对象根；` +
+          `parameters 表达不了的根约束: ${dropped.length > 0 ? dropped.join("/") : `type=${String(normalized.type)}`}）: ` +
+          JSON.stringify(tool.inputSchema),
+      );
+    }
+
     const parameters: SupportedParameters = {
       type: "object",
       properties: normalized.properties ?? {},
