@@ -57,6 +57,11 @@ const VALUE_CASES = [
   ['数组稀疏', { type: 'array', items: S('number') }, [1, , 3]],
   ['数组含 undefined', { type: 'array', items: S('number') }, [1, undefined]],
   ['null 对 string', S('string'), null],
+  // 🟡-H：畸形 enum 形状。旧实现用 `Array.isArray(enum) &&` 兜底，畸形输入
+  // 直接静默 PASS（方向是 fail-open）；现改为 fail-closed。宿主对 `{enum:{a:1}}`
+  // 报 "must be a lossless JSON value"，两者都判「不通过」，故可进差分。
+  ['enum 形状畸形（对象）', { type: 'string', enum: { a: 1 } }, 'zzz'],
+  ['enum 形状畸形（null）', { type: 'string', enum: null }, 'a'],
 ];
 
 /** [名称, schema] —— 覆盖 schema 结构自检的接受/拒绝边界。 */
@@ -75,6 +80,11 @@ const SCHEMA_CASES = [
   // 非标量取值：本仓库曾用 filter 静默丢弃，宿主则是直接拒绝——差分钉住「一致拒绝」
   ['非标量 const', { type: 'string', const: { a: 1 } }],
   ['非标量 enum 元素', { type: 'string', enum: [{ a: 1 }] }],
+  // 🟡-G：`oneOf` 的兄弟 keyword。宿主一律拒绝（位置不受支持），本模块对
+  // **原样** schema 也拒绝——两处自检在「原始输入」这一层行为一致。
+  ['oneOf 兄弟 enum', { oneOf: [S('string'), S('number')], enum: ['x'] }],
+  ['oneOf 兄弟 properties', { oneOf: [S('string'), S('number')], properties: { a: S('string') } }],
+  ['oneOf 兄弟 items', { oneOf: [S('string'), S('number')], items: S('string') }],
 ];
 
 describe('dsh-schema 与真实宿主差分', () => {
@@ -149,6 +159,71 @@ describe('normalizeSchema 的边界如实（不宣称「压平后必通过」）
     ];
     expect(violations.some((v) => v.includes('const'))).toBe(true);
     expect(violations.some((v) => v.includes('enum'))).toBe(true);
+  });
+});
+
+describe('normalizeSchema 对 oneOf 兄弟 keyword 的丢弃（有意的宽松归一）', () => {
+  // 🟡-G：docstring 曾写「无论位置是否受支持」，而 `oneOf` 节点的兄弟 keyword
+  // 恰恰被丢弃——取值维度的承诺为真，位置维度为假。这里把真实行为钉住：
+  // 丢弃 → 本模块自检 PASS，但**原样** schema 被本模块与宿主一致拒绝。
+  // 没有这组用例，那句「无论位置」就又是无例支撑的全称句式。
+  const S = (type) => ({ type });
+
+  it('oneOf 兄弟 enum / const 被整体丢弃（取值约束在该位置不再生效）', () => {
+    const raw = { oneOf: [S('string'), S('number')], enum: ['x'] };
+    expect(normalizeSchema(raw)).toEqual({ oneOf: [S('string'), S('number')] });
+    // 丢弃是「宽松归一」，不是「静默放宽后还宣称受支持」：原样输入仍被拒
+    expect(checkSupportedSchema(raw).length, '原样 schema 必须被拒（位置不受支持）').toBeGreaterThan(0);
+  });
+
+  it('oneOf 兄弟 properties / required / items / additionalProperties 同样丢弃', () => {
+    for (const [key, value] of [
+      ['properties', { a: S('string') }],
+      ['required', ['a']],
+      ['items', S('string')],
+      ['additionalProperties', false],
+    ]) {
+      const raw = { oneOf: [S('string'), S('number')], [key]: value };
+      expect(normalizeSchema(raw), key).toEqual({ oneOf: [S('string'), S('number')] });
+      expect(checkSupportedSchema(raw).length, `${key}: 原样 schema 必须被拒`).toBeGreaterThan(0);
+    }
+  });
+
+  it('与宿主在「原样输入」这一层判定一致（丢弃只发生在归一之后）', () => {
+    requireHost();
+    for (const raw of [
+      { oneOf: [S('string'), S('number')], enum: ['x'] },
+      { oneOf: [S('string'), S('number')], properties: { a: S('string') } },
+      { oneOf: [S('string'), S('number')], const: 'x' },
+    ]) {
+      let hostRejects = false;
+      try {
+        assertSupportedJsonSchema(raw);
+      } catch {
+        hostRejects = true;
+      }
+      expect(hostRejects, `宿主应拒绝原样 ${JSON.stringify(raw)}`).toBe(true);
+      expect(checkSupportedSchema(raw).length > 0, `本模块也应拒绝原样 ${JSON.stringify(raw)}`).toBe(true);
+    }
+  });
+});
+
+describe('validateAgainstSchema 对畸形 schema 的形状兜底（fail-closed，不是 fail-open）', () => {
+  // 🟡-H：旧实现 `Array.isArray(schema.enum) &&` 把「抛 TypeError」改成了
+  // 「静默 PASS」——方向与 🟡-A/🟡-D 相反。生产路径不可达（注册期先拒），
+  // 但死路径上也该 fail-closed。
+  it('畸形 enum 形状返回违规，而不是静默通过', () => {
+    expect(validateAgainstSchema({ type: 'string', enum: { a: 1 } }, 'zzz')).not.toEqual([]);
+    expect(validateAgainstSchema({ type: 'string', enum: null }, 'a')).not.toEqual([]);
+  });
+
+  it('空 enum 也判违规（合法 schema 不会有空 enum）', () => {
+    expect(validateAgainstSchema({ type: 'string', enum: [] }, 'a')).not.toEqual([]);
+  });
+
+  it('正常 enum 行为不变（鉴别力：不是把所有 enum 都判违规）', () => {
+    expect(validateAgainstSchema({ type: 'string', enum: ['a', 'b'] }, 'a')).toEqual([]);
+    expect(validateAgainstSchema({ type: 'string', enum: ['a', 'b'] }, 'c')).not.toEqual([]);
   });
 });
 

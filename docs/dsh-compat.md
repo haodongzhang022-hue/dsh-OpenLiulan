@@ -50,12 +50,35 @@
 `checkSupportedSchema()` 对**真实的 parameters / output.schema** 做结构自检：
 违规即抛错、插件加载失败——比「装上了但调用即炸」可诊断得多。
 
-**`const` / `enum` 一律原样保留，不筛选**：早先实现用 `filter` 丢掉非标量取值
-（`{ type: 'string', enum: [{ a: 1 }] }` → enum 被整体删除），那是**静默放宽**——
-约束从「必须是 `{a:1}`」变成「任意值」，而宿主对同一份 schema 是直接拒绝。
-现在标量与非标量行为一致：保留 → 注册期自检拒绝 → 加载失败。
+**`const` / `enum` 一律原样保留，不筛选（取值维度）**：早先实现用 `filter` 丢掉
+非标量取值（`{ type: 'string', enum: [{ a: 1 }] }` → enum 被整体删除），那是
+**静默放宽**——约束从「必须是 `{a:1}`」变成「任意值」，而宿主对同一份 schema
+是直接拒绝。现在标量与非标量行为一致：保留 → 注册期自检拒绝 → 加载失败。
 代价是上游畸形 schema 不再被静默「修好」，而是让插件加载失败（更可诊断）；
 当前 MCP 工具表 8/8 无此写法，`rejected = 0`。
+
+**例外：`oneOf` 节点上的兄弟 keyword 会被丢弃（位置维度，有意的宽松归一）**。
+`enum` / `const` / `properties` / `required` / `items` / `additionalProperties` /
+`type` 与 `oneOf` 并写时，DSH 子集**禁止**它们共存（宿主报
+`schema.enum is not supported beside oneOf`），但真实 JSON Schema 常这样写。
+`normalizeSchema()` 选择丢弃这些兄弟 keyword，避免常见写法让插件整体加载失败；
+代价是**该位置上的取值约束不再生效**。
+
+```text
+raw  = { oneOf:[{type:'string'},{type:'number'}], enum:['x'] }
+norm = { oneOf:[{type:'string'},{type:'number'}] }   ← enum 被丢弃
+checkSupportedSchema(norm)   = []                    ← 本模块放行
+assertSupportedJsonSchema(raw) → REJECT: schema.enum is not supported beside oneOf
+```
+
+**丢弃只发生在归一之后**：本模块自检与宿主对**原样** schema 的判定一致（都拒绝）。
+同一族还有 `const` / `properties` / `required` / `items` / `additionalProperties`。
+影响面 0——当前 MCP 工具表里 `oneOf` 命中 0（8/8 工具无此写法）。行为由
+`test/dsh-schema.test.mjs` 钉住。
+
+> 此前的 docstring 写「无论取值…**也无论位置是否受支持**」，位置那半为假——
+> 那正是一句**无例支撑的全称断言**。本轮把承诺收回取值维度，并为位置维度
+> 补上例外与实测例。
 
 **不擅自加严**：作者未声明 `additionalProperties` 时，规范化结果**不写**该
 keyword，保持「未声明 = 宽松」。此前实现无条件写成 `false`，等于把宽松的 MCP

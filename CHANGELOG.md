@@ -21,9 +21,9 @@ v1.3.0 完成 ISSUE #33「适配 dsh 新版」：DSH 的 `@deepseek-ai/dsh-tools
 | 增强点 | 做了什么 |
 | :--- | :--- |
 | 版本线探测 | 不导入任何 `@deepseek-ai/dsh-tools` 符号，改用 `ctx.tools.constructor.Config` 的公开投影判定版本线：`mode` 取值含 `ptc` → 新版（modern），含 `code` → 旧版（legacy），无法判定时按兼容路径注册并如实报 `unknown`，不抛错、不阻断加载 |
-| schema 规范化 | 新增 `src/dsh-schema.ts`：把 MCP 侧宽松 `inputSchema` / 输出 schema **按 keyword 白名单收敛**到 DSH 强制的受支持 JSON Schema 子集（`oneOf` 与 `type` 互斥、`required` 必须落在 `properties` 内、强制对象根）。**不丢约束、也不做类型一致性修正**——作者声明的 `const` / `enum` 一律原样保留（无论标量还是对象/数组、无论位置是否受支持），交给注册期自检拒绝（丢弃它等于静默放宽约束）；**也不擅自加严**：作者未声明 `additionalProperties` 时保持「未声明 = 宽松」 |
+| schema 规范化 | 新增 `src/dsh-schema.ts`：把 MCP 侧宽松 `inputSchema` / 输出 schema **按 keyword 白名单收敛**到 DSH 强制的受支持 JSON Schema 子集（`oneOf` 与 `type` 互斥、`required` 必须落在 `properties` 内、强制对象根）。**不丢取值约束、也不做类型一致性修正**——作者声明的 `const` / `enum` 一律原样保留（无论标量还是对象/数组），交给注册期自检拒绝（丢弃它等于静默放宽约束）；**例外**：`oneOf` 节点上的兄弟 keyword 被丢弃（有意的宽松归一，位置维度不受支持，见下）；**也不擅自加严**：作者未声明 `additionalProperties` 时保持「未声明 = 宽松」 |
 | schema 结构自检 | 注册前用 `checkSupportedSchema()` 校验**真实的 parameters / output.schema**；违规即抛错、加载失败，而不是「装上了但调用即炸」 |
-| 值判定差分对齐 | `validateAgainstSchema()` 以真实宿主 `validateJsonSchemaValue` 为 oracle 逐例回归（**22 条值例 + 13 条结构例**，含 `const` / `undefined` / 非有限数 / `-0` / 稀疏数组 / 非普通原型），把「同构」从宣称变成可验证事实。依赖缺失时**硬断言失败**，不再静默空过 |
+| 值判定差分对齐 | `validateAgainstSchema()` 以真实宿主 `validateJsonSchemaValue` 为 oracle 逐例回归（**24 条值例 + 16 条结构例**，含 `const` / `undefined` / 非有限数 / `-0` / 稀疏数组 / 非普通原型 / `oneOf` 兄弟 keyword / 畸形 `enum` 形状），把「同构」从宣称变成可验证事实。依赖缺失时**硬断言失败**，不再静默空过 |
 | `exec.signal` 取消语义 | `execute(args, exec)` 双参签名显式 `throwIfAborted()`：已中止的调用不触达工具体。**有鉴别力的证据**：`test/plugin-cancel.test.mjs` 直接调工具体并统计 `callTool` 零调用（真宿主 dispatch 那条会自己拦下，删掉插件护栏仍全绿，故不作为插件证据） |
 | 类型声明解耦 | 新增 `src/dsh-types.ts`：用本地结构化声明替代 `import type { Context } from '@deepseek-ai/cordis'`，产物与源码都不含宿主包符号；新增 `tsconfig.json` + `npm run typecheck`，离线环境也可类型检查 |
 | 工具清单不硬编码 | 插件与冒烟测试的期望清单都从唯一事实来源 `@openliulan/mcp-server` 的 `TOOLS` / `GAME_TOOLS` 推导，后续批次往 MCP 加工具时插件自动跟随，不会漏注册也测不出「漏注册」 |
@@ -81,8 +81,24 @@ PR #35 复评（第 1 次返工交回）判定必修项清零、放行，并提�
 
 **顺带修正一处计数**：上一版 CHANGELOG 写「22 条值例 + 11 条结构例」，本轮补入
 「非标量 `const` / 非标量 `enum` 元素」两条结构例（差分 oracle 钉住「本仓库与宿主一致拒绝」），
-现为 **22 条值例 + 13 条结构例**。🟡-C 的更正已接受：`963ec97` 那行原本没有计数，
+现为 **22 条值例 + 13 条结构例**（第 2 次复评又补 2 条值例 + 3 条结构例，见下节）。🟡-C 的更正已接受：`963ec97` 那行原本没有计数，
 此前「23→22」的过程描述与仓库事实不符，本轮不再复述该说法。
+
+---
+
+## 修复 · v1.3.0 补丁 — 复评（第 2 次返工）处置：全称断言收口 + 死路径 fail-closed（2026-10-07）
+
+PR #35 第 2 次复评判定「必修清零、无新增 🔴、`proceed / merge`」，另提两条 🟡。
+本轮一并处置，**不新增 🔴、不打回**。
+
+| 项 | 问题 | 处置 |
+| :--- | :--- | :--- |
+| 🟡-G | 新增 docstring / CHANGELOG 写「无论取值是标量还是对象/数组、**也无论位置是否受支持**」——取值那半为真，位置那半为假：`oneOf` 节点的兄弟 keyword（`enum`/`const`/`properties`/`required`/`items`/`additionalProperties`）会被整体丢弃，`{ oneOf:[…], enum:['x'] }` 本模块放行 / 宿主拒绝 | 改口径：把承诺**收回取值维度**，并为位置维度补上例外与实测例。**不改变行为**——丢弃兄弟 keyword 是有意的宽松归一（DSH 子集禁止其与 `oneOf` 共存，真实 schema 却常并写，保留会让插件整体加载失败）。影响面 0（MCP 工具表 `oneOf` 命中 0）。补 3 条结构例 + 3 条专属用例钉住「丢弃 → 归一后放行 / 原样拒绝」，并加宿主差分（原样输入层本模块与宿主一致拒绝） |
+| 🟡-H | `validateAgainstSchema` 新增的 `Array.isArray(schema.enum) &&` 兜底把畸形 enum（`{ enum: { a: 1 } }`）从「抛 TypeError」改成了「静默 PASS」——方向与 🟡-A/🟡-D 相反（fail-open） | 改 **fail-closed**：畸形 `enum` 形状返回违规；空 `enum` 同样判违规。生产路径不可达（注册期自检先拒），但死路径上也宁可报错。补 2 条值例进差分 oracle（宿主对 `{enum:{a:1}}` 也判「不通过」）+ 1 条鉴别力用例（正常 `enum` 行为不变） |
+
+**「无例支撑的全称句式」这个 meta 观察已接受并落到本轮**：新增/改写的每处「一律」
+都配了实测例——`oneOf` 兄弟丢弃有 6 条用例，`enum` 形状兜底有 3 条，全部经变异验证
+（把实现改回旧行为 → 对应用例立刻红）。
 
 ---
 

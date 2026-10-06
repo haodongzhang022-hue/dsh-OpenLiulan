@@ -14,13 +14,18 @@
  * 本模块承担三件事：
  * 1. **规范化**（{@link normalizeSchema}）：对 MCP 侧宽松的 `inputSchema` 做
  *    **keyword 白名单收敛**——丢弃未知 keyword、把 `required` 收敛到
- *    `properties` 之内、强制对象根。它**不丢约束、也不做类型一致性修正**：
- *    作者写的 `const` / `enum` 一律原样保留，无论取值是标量还是对象/数组、
- *    也无论位置是否受支持（如 `{ type: 'string', const: null }`、
- *    `{ type: 'string', enum: [{ a: 1 }] }`）。丢弃它们等于静默放宽约束
- *    （从「必须是 null」变成「任意值」）。这类 schema 由
+ *    `properties` 之内、强制对象根。它**不丢取值约束、也不做类型一致性修正**：
+ *    作者写的 `const` / `enum` 一律原样保留，无论取值是标量还是对象/数组
+ *    （如 `{ type: 'string', const: null }`、`{ type: 'string', enum: [{ a: 1 }] }`）。
+ *    丢弃它们等于静默放宽约束（从「必须是 null」变成「任意值」）。这类 schema 由
  *    {@link checkSupportedSchema} 在注册期拒绝，宿主
  *    `assertSupportedJsonSchema` 同样拒绝——行为一致，早失败优于调用即炸。
+ *    **例外（有意的宽松归一）**：`oneOf` 节点上的兄弟 keyword（`type` /
+ *    `enum` / `const` / `properties` / `required` / `items` /
+ *    `additionalProperties`）会被整体丢弃。原因是 DSH 子集禁止它们与 `oneOf`
+ *    共存，而真实世界的 JSON Schema 常把 `type` / `properties` 与 `oneOf` 并写，
+ *    保留会让插件整体加载失败。代价是该位置上的取值约束不再生效；**原样**
+ *    schema 仍被本模块自检与宿主一致拒绝。有例：见 `test/dsh-schema.test.mjs`。
  *    **不擅自加严**：作者没声明 `additionalProperties` 时保持
  *    「未声明 = 宽松」，与 MCP 侧声明一致。
  * 2. **结构自检**（{@link checkSupportedSchema}）：注册前对 schema 本身
@@ -43,9 +48,9 @@ export interface SupportedSchemaNode {
   required?: string[];
   additionalProperties?: boolean;
   items?: SupportedSchemaNode;
-  /** 作者声明的 `enum`，**原样保留**（是否受支持由 {@link checkSupportedSchema} 判定）。 */
+  /** 作者声明的 `enum`，**原样保留**（是否受支持由 {@link checkSupportedSchema} 判定；`oneOf` 节点上的兄弟 `enum` 例外，见 {@link normalizeSchema}）。 */
   enum?: unknown;
-  /** 作者声明的 `const`，**原样保留**（是否受支持由 {@link checkSupportedSchema} 判定）。 */
+  /** 作者声明的 `const`，**原样保留**（是否受支持由 {@link checkSupportedSchema} 判定；`oneOf` 节点上的兄弟 `const` 例外，见 {@link normalizeSchema}）。 */
   const?: unknown;
   description?: string;
   title?: string;
@@ -143,20 +148,28 @@ export function isLosslessJson(value: unknown): boolean {
 /**
  * 把任意宽松 schema 收敛到受支持子集的 keyword 白名单。
  *
- * **边界（曾两度文档失实）**：本函数只做 keyword 白名单收敛，**不丢约束、
+ * **边界（曾三度文档失实）**：本函数只做 keyword 白名单收敛，**不丢取值约束、
  * 也不做类型一致性修正**。作者声明的 `const` / `enum` 一律原样保留，随后由
  * {@link checkSupportedSchema} 判定——这是有意的：丢弃约束会让「必须是 null」
  * 静默变成「任意值」，比直接报错更危险。
  *
- * 这里踩过一次「文档只对一半」的坑：早先实现用 `filter` 丢弃非标量取值，
- * 于是 `{ type: 'string', const: null }` 保留、而 `{ type: 'string', enum: [{ a: 1 }] }`
- * 被静默丢弃——同一份 docstring 只对前者成立。现在两者行为一致：**一律保留**，
- * 由注册期自检拒绝（宿主同样拒绝这两种写法）。
+ * 踩过两次「文档只对一半」的坑，成因都是**无例支撑的全称句式**：
+ * 1. 早先实现用 `filter` 丢弃非标量取值，于是 `{ type: 'string', const: null }`
+ *    保留、而 `{ type: 'string', enum: [{ a: 1 }] }` 被静默丢弃——docstring 只对
+ *    前者成立。现已改为两者一致：**一律保留**，由注册期自检拒绝（宿主同样拒绝）。
+ * 2. 修 1 时又写下「无论位置是否受支持」，而 `oneOf` 节点的兄弟 keyword 恰恰
+ *    被丢弃。**取值维度**的承诺为真，**位置维度**为假，故此处明确划出例外：
+ *    `oneOf` 节点上的兄弟 keyword 一律丢弃（见下「规则」与
+ *    `test/dsh-schema.test.mjs` 的钉住用例）。这是**有意的宽松归一**，不是疏漏。
  *
  * 因此本函数的返回值**不保证**通过 `checkSupportedSchema`；注册期自检才是最终闸门。
  *
  * 规则：
  * - 只保留白名单 keyword；`oneOf` 与 `type` 互斥（保留 `oneOf`）。
+ * - `oneOf` 节点：**兄弟 keyword 一并丢弃**（含 `type` / `enum` / `const` /
+ *   `properties` / `required` / `items` / `additionalProperties`）。DSH 子集禁止
+ *   它们与 `oneOf` 共存，真实 schema 却常并写，保留会让插件整体加载失败；
+ *   代价是该位置上的取值约束不再生效（**原样** schema 仍被自检与宿主拒绝）。
  * - 对象节点若声明了 `properties`，则把 `required` 收敛为
  *   「既在 properties 里、又在原 required 里」的名字——DSH 要求
  *   `required` 的每一项都必须出现在 `properties` 中。
@@ -178,6 +191,14 @@ export function normalizeSchema(raw: unknown): SupportedSchemaNode {
   if (typeof raw.title === "string") out.title = raw.title;
 
   // oneOf 优先：与 type 互斥。
+  //
+  // **兄弟 keyword 在此被整体丢弃**（`enum` / `const` / `properties` / `required` /
+  // `items` / `additionalProperties` / `type`）。这是有意的宽松归一：DSH 子集禁止
+  // 它们与 `oneOf` 共存，而真实 schema 常把 `type` / `properties` 与 `oneOf` 并写，
+  // 保留会让插件整体加载失败。代价是该位置上的取值约束不再生效——
+  // 例：`{ oneOf: [S('string'), S('number')], enum: ['x'] }` → 只剩 `oneOf`，
+  // `enum` 不再参与判定（**原样** schema 仍被 checkSupportedSchema 与宿主拒绝）。
+  // 由 `test/dsh-schema.test.mjs` 钉住，避免这句再次变成无例支撑的宣称。
   if (Array.isArray(raw.oneOf) && raw.oneOf.length > 0) {
     const branches = raw.oneOf.map((branch) => normalizeSchema(branch));
     if (branches.length >= 2) {
@@ -406,10 +427,20 @@ export function validateAgainstSchema(schema: SupportedSchemaNode, value: unknow
   }
 
   const enumViolation = (): string[] => {
-    // 只在规范化后通过自检的 schema 上调用，故 `enum` 必为非空数组；仍做形状检查
-    // 以免畸形输入（未过自检）在这里抛出。
-    if (Array.isArray(schema.enum) && !schema.enum.includes(value)) {
-      return [`"${path}" must be one of ${JSON.stringify(schema.enum)}`];
+    // 只在规范化后通过自检的 schema 上调用，故 `enum` 正常必为非空数组。形状兜底
+    // 走 **fail-closed**：畸形 `enum`（如 `{ enum: { a: 1 } }`）返回违规，而不是
+    // 静默放过。这条路径生产上不可达（注册期自检先拒），但「死路径上也宁可报错、
+    // 不 fail-open」与 🟡-D 的取向一致——此前 `Array.isArray(...) &&` 会把
+    // 「抛 TypeError」悄悄改成「PASS」，方向正好相反。
+    // 注：宿主对 `{ enum: 'abc' }` 会退化成 `String.prototype.includes`（不健全），
+    // 本模块不模仿该行为，非数组一律判畸形。
+    if (schema.enum !== undefined) {
+      if (!Array.isArray(schema.enum)) {
+        return [`"${path}" schema.enum is malformed (must be a non-empty array)`];
+      }
+      if (schema.enum.length === 0 || !schema.enum.includes(value)) {
+        return [`"${path}" must be one of ${JSON.stringify(schema.enum)}`];
+      }
     }
     if (schema.const !== undefined && value !== schema.const) {
       return [`"${path}" must be ${JSON.stringify(schema.const)}`];
