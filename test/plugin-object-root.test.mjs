@@ -12,7 +12,7 @@
  * `properties` / `required` / `additionalProperties`，凡是被压平丢掉的约束
  * （`oneOf` / 根 `enum` / 根 `const` / `items`）或非 `object` 的根 `type`，一律抛。
  * 例：`{ type:'object', enum:['x'] }` 是**对象根**、逃得过只看 `oneOf` 的护栏，
- * 但约束照样被丢（宿主对原样输入直接拒绝）——同类，一并拦。
+ * 但约束照样被丢（宿主 `assertObjectJsonSchema` 对原样输入直接拒绝）——同类，一并拦。
  *
  * 本文件把两个方向都钉住：
  * - 会被压平的输入（非对象根 / 根上并写的约束 keyword）**必须**抛错，且**抛前零注册**；
@@ -37,6 +37,18 @@ vi.mock('@openliulan/mcp-server', () => ({
 }));
 
 const { apply } = await import('../src/plugin.ts');
+
+// 真实宿主 oracle：parameters 根的校验器是 `assertObjectJsonSchema`（不是
+// `assertSupportedJsonSchema`——后者只判 keyword 子集，对 `{oneOf:[…]}` 是放行的，
+// 因为它只负责「值 schema」那一层）。拿错 oracle 会写出假断言，这里用对的那个。
+let assertObjectJsonSchema;
+let hostAvailable = false;
+try {
+  ({ assertObjectJsonSchema } = await import('@deepseek-ai/dsh-tools'));
+  hostAvailable = typeof assertObjectJsonSchema === 'function';
+} catch {
+  hostAvailable = false;
+}
 
 function mount() {
   const registered = [];
@@ -73,7 +85,6 @@ describe('压平护栏', () => {
   it('对象根上并写的约束 keyword 也抛（同属压平丢失，只看 oneOf 会漏）', () => {
     // `{ type:'object', enum:['x'] }` 是**对象根**——逃得过只看 `oneOf` 的护栏，
     // 但 `parameters` 只取 properties/required/additionalProperties，enum 照样被丢。
-    // 宿主对原样输入直接拒绝（见下方差分断言）。
     for (const [key, value] of [
       ['enum', ['x']],
       ['const', { a: 1 }],
@@ -83,6 +94,27 @@ describe('压平护栏', () => {
       probeSchema = { type: 'object', properties: { a: { type: 'string' } }, [key]: value };
       expect(() => mount(), `根上并写的 ${key} 会被静默丢弃 → 必须抛`).toThrow(/对象根/);
       expect(registeredCount, `${key}：抛错前不得注册`).toBe(0);
+    }
+  });
+
+  it('被拦的写法，宿主 assertObjectJsonSchema 同样拒绝（护栏拦的是真问题）', () => {
+    expect(hostAvailable, '差分 oracle 的宿主依赖不可用：本用例必须真跑，不得静默跳过').toBe(true);
+    for (const raw of [
+      { oneOf: [{ type: 'string' }, { type: 'number' }] },
+      { type: 'string' },
+      { type: 'array', items: { type: 'string' } },
+      { type: 'object', enum: ['x'] },
+      { type: 'object', const: { a: 1 } },
+      { type: 'object', items: { type: 'string' } },
+    ]) {
+      expect(
+        () => assertObjectJsonSchema(raw),
+        `宿主应拒绝原样 ${JSON.stringify(raw)} 作 parameters 根`,
+      ).toThrow();
+    }
+    // 反向：纯对象根宿主放行（证明 oracle 不是「见谁都拒」）
+    for (const raw of [{ type: 'object', properties: { a: { type: 'string' } } }, { type: 'object' }]) {
+      expect(() => assertObjectJsonSchema(raw), JSON.stringify(raw)).not.toThrow();
     }
   });
 

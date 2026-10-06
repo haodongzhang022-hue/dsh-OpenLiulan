@@ -231,9 +231,11 @@ export function apply(ctx: HostContext, config: Record<string, unknown> = {}): v
     // 静默丢掉**——工具注册成功，却变成「收任意参数」。压平后的 parameters 能通过
     // 注册期自检，自检看不出丢失，所以必须在这里拦。
     //
-    // 丢的不是「位置不受支持的写法」（那是 🟡-G：`oneOf` 的兄弟 keyword，保留会让
-    // 插件整体加载失败，且原样 schema 仍被宿主拒绝），而是**整个取值约束**，且保留
-    // 并不会让加载失败——所以这里抛，不静默变宽。
+    // 丢的不是「位置不受支持的写法」（那是 🟡-G：`oneOf` 的兄弟 keyword），而是
+    // **整个取值约束**。压平这条路**看不见损失**：压出来的 parameters 同时通过本模块
+    // 自检与宿主校验，注册成功。若改成把原样 schema 当 parameters 交给宿主，宿主
+    // `assertObjectJsonSchema` 会直接拒绝（加载失败，可见）——所以这里选**抛**：
+    // 响亮失败优于静默变宽。
     //
     // 覆盖整类而不只是 `oneOf` 根。判据是「作者在**根**上声明了 `parameters`
     // 表达不了的约束」——看 raw 而不只看 normalized：`items` 这类 keyword 在

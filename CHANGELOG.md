@@ -115,17 +115,17 @@ PR #35 第 3 次复评判定「0 🔴、必修清零、放行」，另提 4 条 
 | :--- | :--- | :--- |
 | 🟡-I | `enum.length === 0 ||` 是**冗余项**：旧代码 `Array.isArray(enum) && !enum.includes(v)` 对 `enum: []` 本就返回违规（`[].includes()` 恒 false）。删掉该 disjunct → 全量全绿（**等价变异 SURVIVED**）；新增的 `it('空 enum 也判违规')` 改动前后都绿 = **零鉴别力**。CHANGELOG 把「空 enum 同样判违规」列为本轮修复，属夸大 | 删冗余分支 + 删零鉴别力用例；改为把「空 enum」作为**语料**放进差分 oracle（`VALUE_CASES` 25 条），钉住行为本身；CHANGELOG 该行不再声称「修复」 |
 | 🟡-J | `it('oneOf 兄弟 enum / const 被整体丢弃…')` 的 body 只放了 `enum`，`const` / `type` **无例支撑**。变异：在 `branches.length >= 2` 里加回 `if (raw.const !== undefined) out.const = raw.const;` → **全绿**（`type` 同）。故 CHANGELOG「6 条用例 / 全部经变异验证」不成立——`SCHEMA_CASES` 那 3 条只钉「原样被拒」，不钉「归一丢弃」 | 专属用例改成对 **7 个兄弟 keyword**（`type`/`enum`/`const`/`properties`/`required`/`items`/`additionalProperties`）的循环；两个变异（`const` / `type`）**立刻红**（实测各 1 failed）。CHANGELOG meta 段如实承认上轮说法过头 |
-| 🟡-K | 生产路径根部 `oneOf` 是**静默放宽**，不是「位置不受支持」：`plugin.ts` 读 `normalized.properties ?? {}`，`inputSchema = {oneOf:[…]}` → 注册出 `parameters = {type:'object',properties:{}}`，`checkSupportedSchema` **放行**、工具变成「收任意参数」。docstring 给的理由（保留会让插件整体加载失败）**在该位置不成立** | 加**压平护栏**（注册**之前**抛，不压成空对象）。**覆盖整类，不止点名的 `oneOf`**：判据是「作者在**根**上声明了 `parameters` 表达不了的约束」，故看 **raw** 而非只看 normalized（`items` 在归一里就被丢了，只看 normalized 会漏 `{type:'object',items:…}`）。同类实测：`{type:'object',enum:['x']}` 是对象根、逃得过只看 `oneOf` 的护栏，约束照样被丢，宿主对原样输入同样拒绝。新增 `test/plugin-object-root.test.mjs`：会被压平的输入必抛且**抛前零注册**；纯对象根照常注册且**原约束不被压平**（变异：整段关掉 → 3 failed；收窄成只看 `oneOf` → 1 failed） |
+| 🟡-K | 生产路径根部 `oneOf` 是**静默放宽**，不是「位置不受支持」：`plugin.ts` 读 `normalized.properties ?? {}`，`inputSchema = {oneOf:[…]}` → 注册出 `parameters = {type:'object',properties:{}}`，`checkSupportedSchema` **放行**、工具变成「收任意参数」。docstring 给的理由（保留会让插件整体加载失败）**在该位置不成立** | 加**压平护栏**（注册**之前**抛，不压成空对象）。**覆盖整类，不止点名的 `oneOf`**：判据是「作者在**根**上声明了 `parameters` 表达不了的约束」，故看 **raw** 而非只看 normalized（`items` 在归一里就被丢了，只看 normalized 会漏 `{type:'object',items:…}`）。同类实测：`{type:'object',enum:['x']}` 是对象根、逃得过只看 `oneOf` 的护栏，约束照样被丢，宿主对原样输入同样拒绝。新增 `test/plugin-object-root.test.mjs`：会被压平的输入必抛且**抛前零注册**；纯对象根照常注册且**原约束不被压平**；并用**真实宿主 `assertObjectJsonSchema`**（parameters 根的校验器，**不是** `assertSupportedJsonSchema`——后者只判值 schema 的 keyword 子集，对 `{oneOf:[…]}` 是放行的，拿错 oracle 会写出假断言）做差分。变异：整段关掉 → 3 failed；收窄成只看 `oneOf` → 1 failed；用 normalized 代替 raw → 1 failed |
 | 🟡-L | `{enum:'abc'}` 上本模块判违规、宿主 **PASS**（宿主退化成 `String.prototype.includes`）——**真分歧**，但只写在 `src/dsh-schema.ts` 注释里。`docs/dsh-compat.md` 仍讲「以真实宿主为 oracle 逐例回归、把同构变成可验证事实」，而语料的筛选口径（只收两边一致的例子）没写出来 | 新增 `KNOWN_DIVERGENCES` 登记表（含双向断言：本模块必拒 / 宿主必放行，宿主改行为则本表红），`docs/dsh-compat.md` 写明**语料筛选口径**与「已知分歧（有意更严）」。没有这张表，「逐例一致」有一半是筛出来的 |
 
 **顺带更正一处计数分歧**：上轮提交信息写「把 enum 兜底改回 `Array.isArray &&` → 差分 + 兜底共 **3 failed**」。
 复评复跑为 **2 failed**（差分 1 + 兜底 1），本轮在 `93bbf9f` 语料上复现也是 **2 failed**——
 提交信息写错了，已更正。（修完本轮后同一变异为 3 failed，多出的那条是新增的 `KNOWN_DIVERGENCES` 断言，属新增覆盖而非原数。）
 
-**自测（本轮）**：`npm run test` → **203 passed / 0 skipped**（21 文件；装 Chromium 后 `real-browser` 5 例真跑，未装则 198 passed / 5 skipped）；
+**自测（本轮）**：`npm run test` → **204 passed / 0 skipped**（21 文件；装 Chromium 后 `real-browser` 5 例真跑，未装则 199 passed / 5 skipped）；
 `typecheck` 0 错；`test:plugin` `SMOKE_OK tools=8`；`test:dsh-compat` legacy + modern 均 `DSH_COMPAT_OK`；
 `build:plugin` 重建 `lib/index.js` 逐字节一致。变异验证：`const`/`type` 兄弟保留各 1 failed，
-`enum` 兜底改回 fail-open 3 failed，空 enum 冗余项删/加均全绿（如实记为**等价变异**，不是鉴别力）；压平护栏整段关掉 3 failed、收窄成只看 `oneOf` 1 failed。
+`enum` 兜底改回 fail-open 3 failed，空 enum 冗余项删/加均全绿（如实记为**等价变异**，不是鉴别力）；压平护栏整段关掉 3 failed、收窄成只看 `oneOf` 1 failed、用 normalized 代替 raw 1 failed。
 
 ---
 

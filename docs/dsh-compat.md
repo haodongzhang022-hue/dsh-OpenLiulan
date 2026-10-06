@@ -101,6 +101,11 @@ checkSupportedSchema(parameters) = []              ← 注册期自检放行
 | `{ type:'object', const:{…} }` | REJECT | 丢 `const` | 抛 |
 | `{ type:'object', properties:… }` | PASS | 无丢失 | 照常注册 |
 
+上表的「原样 schema 的宿主判定」用的是 **`assertObjectJsonSchema`**（parameters 根的
+校验器），不是 `assertSupportedJsonSchema`——后者只判**值 schema** 的 keyword 子集，
+对 `{oneOf:[…]}` 是**放行**的（`oneOf` 本就是受支持的取值维度）。拿错 oracle 会写出
+假断言（「宿主也拒绝 `{oneOf:[…]}`」并不成立），此处已实测校准。
+
 护栏**看 raw 而非只看 normalized**：`items` 这类 keyword 在 `normalizeSchema` 里就
 被丢掉了（只在 `type:'array'` 下保留），只看 normalized 会漏
 `{ type:'object', items:… }`。
