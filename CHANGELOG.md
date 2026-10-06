@@ -48,6 +48,26 @@ PTC-only 的 SDK 语义增强（如按 scope 调 `presentAs('ptc')`），留作�
 
 ---
 
+## 修复 · v1.3.0 补丁 — CI 真实浏览器验收：断言不再绑第三方页面结构（2026-10-06）
+
+PR #35 的 CI 在 `test` 阶段红：`packages/engines/test/real-browser.acceptance.test.ts` 的
+「框架 extract 提取真实页面主标题」断言失败。
+
+**根因不是框架缺陷，是断言绑错了对象**：旧用例全部打 `https://example.com`，并断言其
+`<h1>Example Domain</h1>`。该站点现已移除这个 h1（正文改由 `/s.js` 注入 `<p>` 与链接），
+第三方一改版，本仓库 CI 就凭空变红——实测本地与 CI 镜像复现一致（`extract` 返回
+「无法定位元素：selector=h1」）。同一根因还潜伏在 `examples/ci-spec.json`（`main` push 的
+`browser-smoke` 任务）与 `quickstart.mjs` / `stealth-viz.mjs` 示例里，一并修掉。
+
+| 处置 | 做了什么 |
+| :--- | :--- |
+| 验收页自持 | 新增 `packages/engines/test/fixtures/`（`acceptance.html` / `next.html`）+ `acceptance-server.ts`：真实 HTTP 服务（随机端口、防目录穿越），页面结构由本仓库掌管 |
+| 断言分层 | 本地 fixture 站点验 DOM 真值（navigate/observe/extract/click 跳转/诊断）；真实公网只验**站点身份与加载成功**（url 含 `example.com`、标题匹配 `/example/i`），不绑第三方 DOM 细节 |
+| 保留反「假装测试」力度 | 用例数 4 → 5，仍真实启动 headless Chromium 驱动真实代码路径；鉴别力实测：把 `extract` 的文本返回值改成空串后，本地 fixture 用例立刻红 |
+| 同源隐患同修 | `examples/ci-spec.json` 与 `docs/mcp-integration.md` 的断言目标由 `h1` 改为 `title`（并注明原因）；`quickstart.mjs` / `stealth-viz.mjs` 的 extract 目标同步改为 `title`，避免示例静默取空值 |
+
+---
+
 ## 最新版本（最高权重）· v1.2.0 — 可安装 DSH 插件包（2026-08-29）
 
 v1.2.0 把 dsh-OpenLiulan 从「源码接入」升级为「一行命令可安装的 **DSH 插件包**」，对标 DSH Plugin Hub 的一键安装体验：
