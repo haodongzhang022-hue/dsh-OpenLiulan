@@ -47,7 +47,7 @@ DSH 的 `@deepseek-ai/dsh-tools` 已从 **`0.1.1` 线**演进到 **`0.1.6` 线**
 
 | 新版约束 | 处置 |
 | :--- | :--- |
-| `output.schema` / `parameters` 受强制 JSON Schema 子集校验 | 统一走 `normalizeSchema()` 压平；注册前 `checkSupportedSchema()` 做**结构自检**，违规即加载失败 |
+| `output.schema` / `parameters` 受强制 JSON Schema 子集校验 | 统一走 `normalizeSchema()` 收敛 keyword 白名单（不做类型一致性修正）；注册前 `checkSupportedSchema()` 做**结构自检**，违规即加载失败 |
 | `execute(args, exec)` 必须尊重 `exec.signal` | 双参签名显式 `throwIfAborted()`，已中止的调用不触达工具体（证据：`test/plugin-cancel.test.mjs` 直接调工具体并统计 `callTool` 零调用） |
 
 另有一项**防御性保留**（不是硬约束）：`run_code` 是 DSH 保留工具名。

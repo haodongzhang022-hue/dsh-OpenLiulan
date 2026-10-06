@@ -8,10 +8,13 @@
  * 2. 每个工具的 parameters / output.schema 落在 DSH 受支持子集内
  *    （**用真实 schema 校验，不是校验常量**）；
  * 3. execute 尊重 exec.signal（直接调工具体，见 test/plugin-cancel.test.mjs）；
- * 4. 产物不内联 DSH 宿主包（构建期体检见 test/build-plugin.test.mjs）。
+ * 4. 产物不内联 DSH 宿主包——用构建期体检的**同一份** findHostInputs() 判定
+ *    生产构建落盘的输入图（字符串匹配拦不住内联，只会假绿）。
  */
 import { createRequire } from 'node:module';
 import { readFile } from 'node:fs/promises';
+import { statSync } from 'node:fs';
+import { findHostInputs } from '../scripts/host-inlining-guard.mjs';
 const require = createRequire(import.meta.url);
 const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 
@@ -78,12 +81,30 @@ const profile = mod.loadProfile('browser');
 if (!profile) throw new Error('未暴露加载画像 loadProfile()');
 if (profile.tools.length !== want.length) throw new Error('画像工具数与注册数不符');
 
-// 产物必须不内联 DSH 宿主包（跨版本兼容的硬约束）
-const bundle = await readFile(new URL('../lib/index.js', import.meta.url), 'utf8');
-for (const hostPkg of ['@deepseek-ai/dsh-tools', '@deepseek-ai/cordis']) {
-  if (bundle.includes('from "' + hostPkg + '"') || bundle.includes('require("' + hostPkg + '")')) {
-    throw new Error('产物内联了宿主包 ' + hostPkg + '，会钉死 DSH 版本');
-  }
+// 产物必须不内联 DSH 宿主包（跨版本兼容的硬约束）。
+//
+// 这里**不再用字符串匹配** `from "@deepseek-ai/cordis"`：esbuild 内联后产物里
+// 只剩 `// node_modules/@deepseek-ai/cordis/lib/index.js` 这样的注释，没有
+// from/require，字符串检查拦不住内联，只会给假绿。改为复用构建期体检的
+// **同一份** findHostInputs() 判定生产构建落盘的输入图。
+const metaFile = new URL('../node_modules/.cache/openliulan/build-metafile.json', import.meta.url);
+let buildMeta;
+try {
+  buildMeta = JSON.parse(await readFile(metaFile, 'utf8'));
+} catch {
+  throw new Error('缺少生产构建的输入图（node_modules/.cache/openliulan/build-metafile.json）：'
+    + '请先跑 npm run build:plugin；缺失即报错，不静默跳过');
+}
+const inlined = findHostInputs(buildMeta.metafile);
+if (inlined.length > 0) {
+  throw new Error('产物内联了宿主包，会钉死 DSH 版本：\n  ' + inlined.join('\n  '));
+}
+
+// 输入图必须描述**当前这份** lib/index.js，否则改完源码不重建也能「绿」。
+const actualBytes = statSync(new URL('../lib/index.js', import.meta.url)).size;
+if (buildMeta.bytes !== actualBytes) {
+  throw new Error(`lib/index.js（${actualBytes} B）与构建输入图（${buildMeta.bytes} B）不是同一次构建：`
+    + '请重跑 npm run build:plugin，别用陈旧产物冒充当前产物');
 }
 
 console.log('SMOKE_OK pkg=' + pkg.name + '@' + pkg.version

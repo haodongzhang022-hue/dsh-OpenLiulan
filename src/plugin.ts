@@ -20,7 +20,7 @@
  *    详见其文档。
  * 2. **schema 受强制 JSON Schema 子集校验**。新版在 `register()` 里执行
  *    `assertSupportedJsonSchema(output.schema)`。本插件把 MCP 侧宽松
- *    `inputSchema` 与输出 schema 统一走 {@link normalizeSchema} 压平为受支持
+ *    `inputSchema` 与输出 schema 统一走 {@link normalizeSchema} 收敛到受支持
  *    子集，并在注册前用 {@link checkSupportedSchema} 做**结构自检**——
  *    违规即抛错、加载失败，而不是「装上了但调用即炸」。
  * 3. **`execute(args, exec)` 的 `exec.signal` 必须被尊重**。新版要求异步工具
@@ -221,8 +221,9 @@ export function apply(ctx: HostContext, config: Record<string, unknown> = {}): v
     // DSH 新版：parameters 必须是受支持子集的 ParameterJsonSchema，
     // 且必须是**对象根**（`ParameterJsonSchema extends ObjectJsonSchema`）。
     // MCP 侧 inputSchema 本就是 { type: 'object', properties, required }；
-    // 经 normalizeSchema 压平后强制对象根。additionalProperties 只在作者
-    // 显式声明时保留，不擅自加严。
+    // 经 normalizeSchema 收敛 keyword 后强制对象根（不做类型一致性修正，
+    // 类型不匹配的 const/enum 由下方注册期自检拒绝）。additionalProperties
+    // 只在作者显式声明时保留，不擅自加严。
     const normalized = normalizeSchema(tool.inputSchema);
     const parameters: SupportedParameters = {
       type: "object",

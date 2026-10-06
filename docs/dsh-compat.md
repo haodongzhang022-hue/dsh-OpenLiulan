@@ -46,7 +46,7 @@
 > 直接手写 `type: 'json'` 到 `output.schema` 会被拒绝。
 
 本插件通过 `src/dsh-schema.ts` 的 `normalizeSchema()` 把 MCP 侧宽松
-`inputSchema` 与输出 schema 压平为上述子集，并在注册前用
+`inputSchema` 与输出 schema 按 keyword 白名单收敛到上述子集（不做类型一致性修正），并在注册前用
 `checkSupportedSchema()` 对**真实的 parameters / output.schema** 做结构自检：
 违规即抛错、插件加载失败——比「装上了但调用即炸」可诊断得多。
 
@@ -133,15 +133,25 @@ npm run typecheck          # 源码类型检查（离线环境亦可跑）
 ### 构建期体检：产物不得内联宿主包
 
 `scripts/host-inlining-guard.mjs` 把「不得钉死 DSH 版本」变成硬约束。这里踩过
-**两处静默失效**，都已固化为反证用例（`test/build-plugin.test.mjs`）：
+**三处静默失效**，都已固化为反证用例（`test/build-plugin.test.mjs`）：
 
 1. 判定**不能**用 `result.outputFiles`——它在 `write: true`（本项目实际构建方式）
    下恒为 `undefined`，分支永不进入；改用 `metafile.inputs`。
 2. 命中后**不能**只 `result.errors.push()`——在 `onEnd` 里往 `errors` 推条目
    不会让构建失败；必须 `throw`。`metafile` 缺失时同样 `throw`。
+3. 体检**不能留第二份副本**。抽成独立模块后，`build-plugin.mjs`（真正被执行
+   的那份）里还留着一份旧副本，测试测的是孤儿模块——生产路径照旧静默失效，
+   还多了一层「测试全绿」的假信心。
 
-`test/build-plugin.test.mjs` 注入一条真实 `@deepseek-ai/cordis` import，
-断言构建**必须失败**——防止体检再次退化成死代码。
+`test/build-plugin.test.mjs` 因此分三层钉住：**同源**（源码断言
+`build-plugin.mjs` 必须 import 该模块、不得再出现 `const assertNoHostInlining =`
+或 `result.errors.push`）、**反证**（`OPENLIULAN_BUILD_ENTRY` 指向含真实
+`@deepseek-ai/cordis` import 的探针 → `node scripts/build-plugin.mjs` 必须非零
+退出）、**不误报**（同机制跑干净入口必须退出 0）。
+
+`test/plugin-smoke.mjs` 的产物检查也不再字符串匹配 `from "@deepseek-ai/cordis"`
+（esbuild 内联后产物里只剩注释，拦不住内联、只会假绿），改为读生产构建落盘的
+输入图、复用**同一份** `findHostInputs()`。
 
 ## 5. CI 接入
 

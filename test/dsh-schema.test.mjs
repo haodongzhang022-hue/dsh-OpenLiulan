@@ -6,7 +6,9 @@
  * `-0`、稀疏数组）。本测试以真实宿主为 oracle 逐例比对，把「同构」从宣称
  * 变成可验证事实；分歧会直接红。
  *
- * 依赖不可用时自动跳过（本仓库把 DSH 声明为可选 peer）。
+ * **依赖缺失不得静默跳过**：本文件此前用 `if (!available) return;`，导入失败时
+ * 整例空过（`describe.runIf(true)` 也不拦），本地/未来依赖缺失会给出假绿。
+ * 现在改为硬断言——依赖装不上就红，因为「差分 oracle 跑没跑过」本身就是结论。
  */
 import { describe, it, expect, beforeAll } from 'vitest';
 import { checkSupportedSchema, isLosslessJson, normalizeSchema, validateAgainstSchema } from '../src/dsh-schema.ts';
@@ -25,6 +27,11 @@ beforeAll(async () => {
 });
 
 const S = (type) => ({ type });
+
+/** 依赖缺失即失败：oracle 没跑过 = 结论不成立，不能算通过。 */
+function requireHost() {
+  expect(available, '差分 oracle 的宿主依赖不可用（@deepseek-ai/dsh-tools）：本用例必须真跑，不得静默跳过').toBe(true);
+}
 
 /** [名称, schema, 值] —— 覆盖曾出现分歧的判定。 */
 const VALUE_CASES = [
@@ -67,9 +74,9 @@ const SCHEMA_CASES = [
   ['数组 items', { type: 'array', items: S('number') }],
 ];
 
-describe.runIf(true)('dsh-schema 与真实宿主差分', () => {
+describe('dsh-schema 与真实宿主差分', () => {
   it('值判定与 validateJsonSchemaValue 逐例一致', () => {
-    if (!available) return;
+    requireHost();
     const mismatches = [];
     for (const [name, schema, value] of VALUE_CASES) {
       const mine = validateAgainstSchema(schema, value);
@@ -82,7 +89,7 @@ describe.runIf(true)('dsh-schema 与真实宿主差分', () => {
   });
 
   it('schema 结构判定与 assertSupportedJsonSchema 逐例一致', () => {
-    if (!available) return;
+    requireHost();
     const mismatches = [];
     for (const [name, schema] of SCHEMA_CASES) {
       let hostRejects = false;
@@ -100,13 +107,34 @@ describe.runIf(true)('dsh-schema 与真实宿主差分', () => {
   });
 
   it('isLosslessJson 与宿主边界一致（undefined / 非有限数 / -0 / 稀疏 / 非普通原型）', () => {
-    if (!available) return;
+    requireHost();
     const cases = [undefined, Infinity, NaN, -0, [1, , 3], { a: undefined }, new Date(), Object.create({ z: 1 }), 'ok', 0, null, [1, 2]];
     for (const value of cases) {
       // 用注解式节点（无 type）让宿主只跑 lossless 边界判定
       const host = validateJsonSchemaValue({}, value);
       expect(isLosslessJson(value), `isLosslessJson(${String(value)})`).toBe(host.length === 0);
     }
+  });
+});
+
+describe('normalizeSchema 的边界如实（不宣称「压平后必通过」）', () => {
+  // 文档曾写「压平为受支持子集」，但类型不匹配的 const/enum 会被原样保留，
+  // 而 checkSupportedSchema 会拒绝。行为上不冲突（宿主同样拒绝），但「压平」
+  // 名不副实。这里把真实边界钉住：保留 → 注册期拒绝，两条断言一起才有意义。
+  it('类型不匹配的 const / enum 原样保留（不静默放宽约束）', () => {
+    const normalizedConst = normalizeSchema({ type: 'string', const: null });
+    expect(normalizedConst.const, '丢弃 const 会把「必须是 null」静默放宽为「任意值」').toBe(null);
+    const normalizedEnum = normalizeSchema({ type: 'string', enum: [1] });
+    expect(normalizedEnum.enum).toEqual([1]);
+  });
+
+  it('同一份 schema 由注册期自检拒绝（最终闸门在 checkSupportedSchema）', () => {
+    const violations = [
+      ...checkSupportedSchema(normalizeSchema({ type: 'string', const: null })),
+      ...checkSupportedSchema(normalizeSchema({ type: 'string', enum: [1] })),
+    ];
+    expect(violations.some((v) => v.includes('const'))).toBe(true);
+    expect(violations.some((v) => v.includes('enum'))).toBe(true);
   });
 });
 
@@ -122,7 +150,7 @@ describe('normalizeSchema 不擅自加严', () => {
   });
 
   it('规范化结果通过宿主结构校验', () => {
-    if (!available) return;
+    requireHost();
     for (const raw of [
       { type: 'object', properties: { a: { type: 'string' } } },
       { type: 'object', properties: { a: { type: 'array', items: { type: 'number' } } }, required: ['a', 'ghost'] },

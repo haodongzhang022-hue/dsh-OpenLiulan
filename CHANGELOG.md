@@ -21,24 +21,24 @@ v1.3.0 完成 ISSUE #33「适配 dsh 新版」：DSH 的 `@deepseek-ai/dsh-tools
 | 增强点 | 做了什么 |
 | :--- | :--- |
 | 版本线探测 | 不导入任何 `@deepseek-ai/dsh-tools` 符号，改用 `ctx.tools.constructor.Config` 的公开投影判定版本线：`mode` 取值含 `ptc` → 新版（modern），含 `code` → 旧版（legacy），无法判定时按兼容路径注册并如实报 `unknown`，不抛错、不阻断加载 |
-| schema 规范化 | 新增 `src/dsh-schema.ts`：把 MCP 侧宽松 `inputSchema` / 输出 schema 压平为 DSH 强制的受支持 JSON Schema 子集（白名单 keyword、`oneOf` 与 `type` 互斥、`required` 必须落在 `properties` 内、强制对象根）。**不擅自加严**：作者未声明 `additionalProperties` 时保持「未声明 = 宽松」 |
+| schema 规范化 | 新增 `src/dsh-schema.ts`：把 MCP 侧宽松 `inputSchema` / 输出 schema **按 keyword 白名单收敛**到 DSH 强制的受支持 JSON Schema 子集（`oneOf` 与 `type` 互斥、`required` 必须落在 `properties` 内、强制对象根）。**不做类型一致性修正**——类型不匹配的 `const` / `enum` 原样保留，交给注册期自检拒绝（丢弃它等于静默放宽约束）；**也不擅自加严**：作者未声明 `additionalProperties` 时保持「未声明 = 宽松」 |
 | schema 结构自检 | 注册前用 `checkSupportedSchema()` 校验**真实的 parameters / output.schema**；违规即抛错、加载失败，而不是「装上了但调用即炸」 |
-| 值判定差分对齐 | `validateAgainstSchema()` 以真实宿主 `validateJsonSchemaValue` 为 oracle 逐例回归（含 `const` / `undefined` / 非有限数 / `-0` / 稀疏数组 / 非普通原型），把「同构」从宣称变成可验证事实 |
+| 值判定差分对齐 | `validateAgainstSchema()` 以真实宿主 `validateJsonSchemaValue` 为 oracle 逐例回归（**22 条值例 + 11 条结构例**，含 `const` / `undefined` / 非有限数 / `-0` / 稀疏数组 / 非普通原型），把「同构」从宣称变成可验证事实。依赖缺失时**硬断言失败**，不再静默空过 |
 | `exec.signal` 取消语义 | `execute(args, exec)` 双参签名显式 `throwIfAborted()`：已中止的调用不触达工具体。**有鉴别力的证据**：`test/plugin-cancel.test.mjs` 直接调工具体并统计 `callTool` 零调用（真宿主 dispatch 那条会自己拦下，删掉插件护栏仍全绿，故不作为插件证据） |
 | 类型声明解耦 | 新增 `src/dsh-types.ts`：用本地结构化声明替代 `import type { Context } from '@deepseek-ai/cordis'`，产物与源码都不含宿主包符号；新增 `tsconfig.json` + `npm run typecheck`，离线环境也可类型检查 |
 | 工具清单不硬编码 | 插件与冒烟测试的期望清单都从唯一事实来源 `@openliulan/mcp-server` 的 `TOOLS` / `GAME_TOOLS` 推导，后续批次往 MCP 加工具时插件自动跟随，不会漏注册也测不出「漏注册」 |
-| 跨版本产物体检 | `scripts/host-inlining-guard.mjs`：产物内联任何 `@deepseek-ai/*` 即**构建失败**。判定走 `metafile.inputs`（`write: true` 下 `outputFiles` 恒 `undefined`，用它会让体检静默失效），且命中即 `throw`（`onEnd` 里往 `errors` 推条目不会让构建失败）。`test/build-plugin.test.mjs` 注入真实宿主 import 做反证 |
+| 跨版本产物体检 | `scripts/host-inlining-guard.mjs`：产物内联任何 `@deepseek-ai/*` 即**构建失败**。判定走 `metafile.inputs`（`write: true` 下 `outputFiles` 恒 `undefined`，用它会让体检静默失效），且命中即 `throw`（`onEnd` 里往 `errors` 推条目不会让构建失败）。体检**只有这一份实现**，`build-plugin.mjs` import 它、不留副本；`test/build-plugin.test.mjs` 用环境变量把入口换成含真实宿主 import 的探针，对**生产脚本本身**断言非零退出 |
 | 保留名护栏（降级） | `assertNotReserved()` 明确为**防御性保留**、非硬约束：真实路径上默认不可达（MCP 工具表无 `code` 工具，`prefix="run"` 产出的是 `run_observe`）。主防线是命名前缀；判定同时覆盖 `tool.name` 本身作为兜底。可达性边界由 `test/plugin-reserved-name.test.mjs` 钉住 |
 | 加载画像清理 | `PROFILES` 随插件卸载（effect disposer）同步清理，避免同 prefix 重载后读到陈旧画像 |
 | 真实宿主验收 | `test/plugin-dsh-compat.test.mjs`：用真实 cordis + ToolRuntime 装配插件，验收注册清单、版本线、schema 子集、`execute → output.schema → render` 全链路、宿主取消兜底、effect 卸载回收与画像清理 |
 | 双版本 CI 验收 | `scripts/dsh-compat-check.mjs`：在**隔离临时目录**各装一份真实宿主，分别跑旧版（`0.1.1-rc.2`）与新版（`0.1.6-alpha.2`）适配验收；`.cnb.yml` 的 `main` 与 `pull_request` 均挂 `dsh-compat` 任务 |
-| CI 覆盖离目录冒烟 | `.cnb.yml` 的 `build-and-test` 增加 `npm run test:plugin`——此前该自检存在但**不在 CI**，插件产物坏了 CI 也不红 |
+| CI 覆盖离目录冒烟 | `.cnb.yml` 的 `build-and-test` 增加 `npm run test:plugin`——此前该自检存在但**不在 CI**，插件产物坏了 CI 也不红。该自检的产物检查已从字符串匹配 `from "@deepseek-ai/cordis"`（esbuild 内联后只剩注释，拦不住、只会假绿）换成复用构建期体检的**同一份** `findHostInputs()` 判定生产构建落盘的输入图 |
 
 **新版适配的两条硬约束与一项防御性保留**：
 
 | 新版约束 | 不处置的后果 | 本版处置 |
 | :--- | :--- | :--- |
-| schema 受强制 JSON Schema 子集校验（`assertSupportedJsonSchema`） | 作者侧 `type: 'json'` 等写法被直接拒绝，插件整个加载失败 | 统一走 `normalizeSchema()` 压平；注册期 `checkSupportedSchema()` 对真实 schema 自检，违规即加载失败 |
+| schema 受强制 JSON Schema 子集校验（`assertSupportedJsonSchema`） | 作者侧 `type: 'json'` 等写法被直接拒绝，插件整个加载失败 | 统一走 `normalizeSchema()` 收敛 keyword；注册期 `checkSupportedSchema()` 对真实 schema 自检，违规即加载失败 |
 | `execute(args, exec)` 必须尊重 `exec.signal` | 长任务无视宿主取消，与新版取消窗口的 `ABORTED` 语义不一致 | 双参签名显式 `throwIfAborted()`；`test/plugin-cancel.test.mjs` 以「已中止 → `callTool` 零调用」为证据 |
 | （防御性保留，非硬约束）`run_code` 为保留工具名 | 若用户把 prefix 改成 `run` 且 MCP 侧恰有 `code` 工具，宿主 `register()` 会抛错 | 主防线是命名前缀（默认 `browser_`）；`assertNotReserved()` 兜底并指明 prefix 冲突。**不当作硬约束宣称** |
 

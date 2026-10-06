@@ -12,10 +12,15 @@
  * 校验 canonical value。
  *
  * 本模块承担三件事：
- * 1. **规范化**（{@link normalizeSchema}）：把 MCP 侧宽松的 `inputSchema`
- *    压平为受支持子集——丢弃未知 keyword、把 `required` 收敛到 `properties`
- *    之内、强制对象根。**不擅自加严**：作者没声明
- *    `additionalProperties` 时保持「未声明 = 宽松」，与 MCP 侧声明一致。
+ * 1. **规范化**（{@link normalizeSchema}）：对 MCP 侧宽松的 `inputSchema` 做
+ *    **keyword 白名单收敛**——丢弃未知 keyword、把 `required` 收敛到
+ *    `properties` 之内、强制对象根。它**不做类型一致性修正**：作者写的
+ *    `{ type: 'string', const: null }` 会被原样保留，因为丢弃它等于静默放宽
+ *    约束（从「必须是 null」变成「任意值」）。这类 schema 由
+ *    {@link checkSupportedSchema} 在注册期拒绝，宿主
+ *    `assertSupportedJsonSchema` 同样拒绝——行为一致，早失败优于调用即炸。
+ *    **不擅自加严**：作者没声明 `additionalProperties` 时保持
+ *    「未声明 = 宽松」，与 MCP 侧声明一致。
  * 2. **结构自检**（{@link checkSupportedSchema}）：注册前对 schema 本身
  *    做一次受支持子集校验（对齐宿主 `assertSupportedJsonSchema` 的判定），
  *    违规项写入加载画像并让插件**加载失败**，避免「装上了但调用即炸」。
@@ -133,7 +138,13 @@ export function isLosslessJson(value: unknown): boolean {
 }
 
 /**
- * 把任意宽松 schema 压平为受支持子集。
+ * 把任意宽松 schema 收敛到受支持子集的 keyword 白名单。
+ *
+ * **边界（曾文档失实）**：本函数只做 keyword 白名单收敛，**不做类型一致性
+ * 修正**。类型不匹配的 `const` / `enum`（如 `{ type: 'string', const: null }`）
+ * 会原样保留，随后被 {@link checkSupportedSchema} 拒绝——这是有意的：丢弃
+ * 约束会让「必须是 null」静默变成「任意值」，比直接报错更危险。因此本函数
+ * 的返回值**不保证**通过 `checkSupportedSchema`；注册期自检才是最终闸门。
  *
  * 规则：
  * - 只保留白名单 keyword；`oneOf` 与 `type` 互斥（保留 `oneOf`）。
@@ -174,7 +185,8 @@ export function normalizeSchema(raw: unknown): SupportedSchemaNode {
     out.type = declaredType as SupportedSchemaNode["type"];
   }
 
-  // 标量 enum / const（数组/对象上的 enum 不被接受，直接丢弃）。
+  // 标量 enum / const：仅在声明了标量 type 时保留（数组/对象上的 enum 直接
+  // 丢弃）；保留时**不校验元素/取值与 type 是否匹配**，不匹配的留给注册期自检拒绝。
   const isScalar = out.type !== undefined && SCALAR_TYPES.has(out.type);
   if (isScalar) {
     if (Array.isArray(raw.enum) && raw.enum.length > 0) {
