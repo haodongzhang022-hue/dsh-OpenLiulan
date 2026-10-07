@@ -48,6 +48,50 @@ PTC-only 的 SDK 语义增强（如按 scope 调 `presentAs('ptc')`），留作�
 
 ---
 
+## 修复 · v1.3.0 补丁 — 测试侧复测：压平护栏补 raw 白名单闸，让「覆盖整类」成真（2026-10-07）
+
+测试席在 `cf9691d` 的复测判定 🟡 **有条件**：自报 5 条 🟡P2 全部为真、全部清零，
+但**同一病灶（「归一后与正常同形 → 护栏放行 → 注册成收任意参数」）还有未覆盖的整片**，
+而本轮新增的注释/测试同时宣称「**覆盖整类**」——与刚被拿掉的那句同属**无例支撑的全称断言**。
+本轮按测试席给出的 **B 方案**处置（而不是把宣称收窄成七类），并顺带更正产物尺寸。
+
+| 项 | 问题（测试席实测复现） | 处置 |
+| :--- | :--- | :--- |
+| 🟡-N | **「覆盖整类」被证伪**：护栏是**手工枚举**（`ROOT_ONLY_KEYWORDS = [oneOf, enum, const, items]`），不是类。以下四类全部**静默压平 → 注册成功 → 宿主对原样输入拒绝**，枚举层一个都拦不住：<br>**F1** 根组合子/其它 keyword——`anyOf` / `allOf` / `not` / `$ref` / `if…then` / `minProperties` / `patternProperties` / `propertyNames`（`oneOf` 被拦、`anyOf` 一字之差放行）；<br>**F2** 嵌套层约束——`properties.a` 上的 `pattern` / `minLength` / `format` / `maximum` / `minItems` / 嵌套 `anyOf`；<br>**F3** 布尔 `additionalProperties` **单独出现**（无 `type`、无 `properties` → `looksObject` 为假 → keyword **整个丢弃**），另嵌套非布尔 `ap` 同样静默丢；<br>**F4** `required` 被收敛掉作者声明的名字（`required:['a','b']` → `['a']`，**放宽**） | 加 **raw 白名单闸**（`checkRawSchemaSubset()`）：不问「我们认识什么」，只问「**作者原样的 schema 是否已落在受支持子集内**」——直接复用 `checkSupportedSchema()` 的语义，**判定只有一份实现**。减去的是 🟡-G 明确接受的**有意宽松**（`oneOf` 与兄弟 keyword 并写的豁免，原样 schema 本模块与宿主一致拒绝，见 `docs/dsh-compat.md`） |
+| 尺寸口径 | 上一轮自报产物 `938,807 B`，测试席 `git cat-file -s` 与工作区实测均为 **947,909 B**；sha 对、大小错 | 本文件与文档不再写死字节数（改为以 `sha256` 为准），并把「产物指标以 `git cat-file -s` 为准、不写第二套数」写进 `docs/dsh-compat.md` |
+| 措辞（🟡-2 精度备注） | 注释写「两判据…缺任一层都会漏」，而测试席穷举 112 万 + 42 万组后证明 **`normalized.type` 从不单独命中**（凡它命中处 raw 判据必同时命中）——是**行为冗余**，不是互补 | `src/plugin.ts` 该段注释收口：如实写明「行为冗余、删它零行为变化」，并说明 🟡-2b 里那句 `toMatch(/type=string/)` 是**消息断言**而非行为断言 |
+
+**raw 白名单闸的豁免口径（唯一减法，必须精确）**：某 `oneOf` 节点在 **raw 上**的违规
+**全部**属「`oneOf` 与非 `oneOf` 的兄弟 keyword 冲突」这一类时，该节点的这类违规被豁免
+（归一确实把这些兄弟 keyword 整体丢弃）；节点上的其它违规（未知 keyword 如 `pattern`、
+拼错的 `required`）照旧计入，`oneOf` 各分支也照旧下钻、其违规不豁免。
+
+> ⚠️ **口径纠正（实测）**：**根**上的 `{ oneOf:[…], type:'string' }` **本来就被枚举层拦**
+> （`丢掉根 oneOf` + `丢掉根 type(...)`）——那是 🟡-K 的核心病灶，护栏**继续拦**，
+> 不算误杀。真正受益于 🟡-G 宽松的是**嵌套**位置（`properties.a` 上的 `oneOf` 兄弟
+> keyword，根仍是合法对象、不会变宽）。两者在测试里分别钉住，别写成「凡 `oneOf`
+> 兄弟都放行」。
+
+**「覆盖整类」现在有例支撑**：`test/plugin-object-root.test.mjs` 从 12 例扩到 **22 例**，
+新增 F1–F4 **四组逐类用例**，每条都带「**抛前零注册**」+「**宿主 `assertObjectJsonSchema`
+双向断言**」（原样必拒 / 合法必放行），另加「反例确实归一后与正常同形」的自证
+（否则用例是假的）、「不误伤合法形态」、「🟡-G 有意宽松不被误杀」、「豁免不得扩大」。
+
+**变异验证**（新增用例的鉴别力，逐条实测）：
+
+| 变异 | 结果 |
+| :--- | :--- |
+| 删掉 raw 白名单闸（第 4 层整段移除） | **5 failed**（F1–F4 四组 + 反例自证） |
+| 豁免退化成裸调用（去掉 `oneOf` 兄弟豁免） | **1 failed**（🟡-G 放行用例） |
+| 豁免扩大（本节点有 `oneOf` 就全豁免） | **1 failed**（豁免不得扩大用例） |
+
+**影响面**：8/8 真实工具经 raw 白名单闸 **0 违规**、9 种合法形态（嵌套 `enum` /
+`const` / `oneOf` / 注解 / 数组 / `integer` / `null` / 空 `properties` / 布尔 `ap`）
+全放行；F1–F4 反例 **17/17 全捕获**。今天仍不可达（真实工具都是
+`{ type:'object', properties }`），属健壮性护栏。
+
+---
+
 ## 修复 · v1.3.0 补丁 — 测试侧 5 条 🟡P2 清零（2026-10-06）
 
 测试席在 PR #35 的验收结论（🟢 放行合并）里另报 5 条非功能 🟡P2。本补丁一并清掉，
@@ -159,7 +203,7 @@ PR #35 第 3 次复评判定「0 🔴、必修清零、放行」，另提 4 条 
 | :--- | :--- | :--- |
 | 🟡-I | `enum.length === 0 ||` 是**冗余项**：旧代码 `Array.isArray(enum) && !enum.includes(v)` 对 `enum: []` 本就返回违规（`[].includes()` 恒 false）。删掉该 disjunct → 全量全绿（**等价变异 SURVIVED**）；新增的 `it('空 enum 也判违规')` 改动前后都绿 = **零鉴别力**。CHANGELOG 把「空 enum 同样判违规」列为本轮修复，属夸大 | 删冗余分支 + 删零鉴别力用例；改为把「空 enum」作为**语料**放进差分 oracle（`VALUE_CASES` 25 条），钉住行为本身；CHANGELOG 该行不再声称「修复」 |
 | 🟡-J | `it('oneOf 兄弟 enum / const 被整体丢弃…')` 的 body 只放了 `enum`，`const` / `type` **无例支撑**。变异：在 `branches.length >= 2` 里加回 `if (raw.const !== undefined) out.const = raw.const;` → **全绿**（`type` 同）。故 CHANGELOG「6 条用例 / 全部经变异验证」不成立——`SCHEMA_CASES` 那 3 条只钉「原样被拒」，不钉「归一丢弃」 | 专属用例改成对 **7 个兄弟 keyword**（`type`/`enum`/`const`/`properties`/`required`/`items`/`additionalProperties`）的循环；两个变异（`const` / `type`）**立刻红**（实测各 1 failed）。CHANGELOG meta 段如实承认上轮说法过头 |
-| 🟡-K | 生产路径根部 `oneOf` 是**静默放宽**，不是「位置不受支持」：`plugin.ts` 读 `normalized.properties ?? {}`，`inputSchema = {oneOf:[…]}` → 注册出 `parameters = {type:'object',properties:{}}`，`checkSupportedSchema` **放行**、工具变成「收任意参数」。docstring 给的理由（保留会让插件整体加载失败）**在该位置不成立** | 加**压平护栏**（注册**之前**抛，不压成空对象）。**覆盖整类，不止点名的 `oneOf`**：判据是「作者在**根**上声明了 `parameters` 表达不了的约束」，故看 **raw** 而非只看 normalized（`items` 在归一里就被丢了，只看 normalized 会漏 `{type:'object',items:…}`）。同类实测：`{type:'object',enum:['x']}` 是对象根、逃得过只看 `oneOf` 的护栏，约束照样被丢，宿主对原样输入同样拒绝。新增 `test/plugin-object-root.test.mjs`：会被压平的输入必抛且**抛前零注册**；纯对象根照常注册且**原约束不被压平**；并用**真实宿主 `assertObjectJsonSchema`**（parameters 根的校验器，**不是** `assertSupportedJsonSchema`——后者只判值 schema 的 keyword 子集，对 `{oneOf:[…]}` 是放行的，拿错 oracle 会写出假断言）做差分。变异：整段关掉 → 3 failed；收窄成只看 `oneOf` → 1 failed；用 normalized 代替 raw → 1 failed |
+| 🟡-K | 生产路径根部 `oneOf` 是**静默放宽**，不是「位置不受支持」：`plugin.ts` 读 `normalized.properties ?? {}`，`inputSchema = {oneOf:[…]}` → 注册出 `parameters = {type:'object',properties:{}}`，`checkSupportedSchema` **放行**、工具变成「收任意参数」。docstring 给的理由（保留会让插件整体加载失败）**在该位置不成立** | 加**压平护栏**（注册**之前**抛，不压成空对象）。**不止点名的 `oneOf`**：判据是「作者在**根**上声明了 `parameters` 表达不了的约束」，故看 **raw** 而非只看 normalized（`items` 在归一里就被丢了，只看 normalized 会漏 `{type:'object',items:…}`）。同类实测：`{type:'object',enum:['x']}` 是对象根、逃得过只看 `oneOf` 的护栏，约束照样被丢，宿主对原样输入同样拒绝。新增 `test/plugin-object-root.test.mjs`：会被压平的输入必抛且**抛前零注册**；纯对象根照常注册且**原约束不被压平**；并用**真实宿主 `assertObjectJsonSchema`**（parameters 根的校验器，**不是** `assertSupportedJsonSchema`——后者只判值 schema 的 keyword 子集，对 `{oneOf:[…]}` 是放行的，拿错 oracle 会写出假断言）做差分。变异：整段关掉 → 3 failed；收窄成只看 `oneOf` → 1 failed；用 normalized 代替 raw → 1 failed。**（🟡-N 校正）**本行原写「覆盖整类」，属无例支撑的全称断言，已收回；覆盖面由 🟡-N 新增的 raw 白名单闸承担，见下节 |
 | 🟡-L | `{enum:'abc'}` 上本模块判违规、宿主 **PASS**（宿主退化成 `String.prototype.includes`）——**真分歧**，但只写在 `src/dsh-schema.ts` 注释里。`docs/dsh-compat.md` 仍讲「以真实宿主为 oracle 逐例回归、把同构变成可验证事实」，而语料的筛选口径（只收两边一致的例子）没写出来 | 新增 `KNOWN_DIVERGENCES` 登记表（含双向断言：本模块必拒 / 宿主必放行，宿主改行为则本表红），`docs/dsh-compat.md` 写明**语料筛选口径**与「已知分歧（有意更严）」。没有这张表，「逐例一致」有一半是筛出来的 |
 
 **顺带更正一处计数分歧**：上轮提交信息写「把 enum 兜底改回 `Array.isArray &&` → 差分 + 兜底共 **3 failed**」。

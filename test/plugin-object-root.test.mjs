@@ -8,11 +8,18 @@
  * 这里丢的**不是**「位置不受支持的写法」（那是 🟡-G，保留会让插件整体加载失败），
  * 而是**整个取值约束**，且注册成功——正是 🟡-D 那条 fail-open。所以护栏选择抛错。
  *
- * **护栏覆盖整类，不止评审点名的 `oneOf`**：`parameters` 只从 normalized 取
- * `properties` / `required` / `additionalProperties`，凡是被压平丢掉的约束
- * （`oneOf` / 根 `enum` / 根 `const` / `items`）或非 `object` 的根 `type`，一律抛。
- * 例：`{ type:'object', enum:['x'] }` 是**对象根**、逃得过只看 `oneOf` 的护栏，
- * 但约束照样被丢（宿主 `assertObjectJsonSchema` 对原样输入直接拒绝）——同类，一并拦。
+ * **护栏分四层，前两层为枚举、第三层为归一形状、第四层为白名单（🟡-N 校正过）**：
+ * 此处曾写「覆盖整类」，那是**无例支撑的全称断言**——枚举层（`ROOT_ONLY_KEYWORDS`）
+ * 只认识 `oneOf` / `enum` / `const` / `items`，`anyOf` / `pattern` / `minProperties`
+ * 一字之差就整片放行（测试席 F1–F4 已证，见文件末尾的钉住用例）。现在枚举层只说
+ * 它枚举了什么，全称性由**第 4 层的 raw 白名单闸**（`checkRawSchemaSubset`）承担。
+ *
+ * 枚举层抓的两类（仍然有效、仍是**最短路径**——先给更精确的原因）：
+ * - `parameters` 只从 normalized 取 `properties` / `required` / `additionalProperties`，
+ *   凡是被压平丢掉的约束（`oneOf` / 根 `enum` / 根 `const` / `items`）或非 `object`
+ *   的根 `type`，一律抛。例：`{ type:'object', enum:['x'] }` 是**对象根**、逃得过
+ *   只看 `oneOf` 的护栏，但约束照样被丢（宿主 `assertObjectJsonSchema` 对原样输入
+ *   直接拒绝）——同类，一并拦。
  *
  * 本文件把两个方向都钉住：
  * - 会被压平的输入（非记录根 / 非对象根 / 根上并写的约束 keyword / 被静默丢弃的
@@ -32,7 +39,7 @@
  * 压平」，不是「宿主会兜底」。
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { normalizeSchema } from '../src/dsh-schema.ts';
+import { checkSupportedSchema, normalizeSchema } from '../src/dsh-schema.ts';
 
 /** 当前探针工具的 inputSchema（每个用例前重置）。 */
 let probeSchema;
@@ -326,6 +333,171 @@ describe('压平护栏', () => {
       { type: 'object', properties: {}, additionalProperties: true },
     ]) {
       expect(() => assertObjectJsonSchema(raw), JSON.stringify(raw)).not.toThrow();
+    }
+  });
+});
+
+describe('🟡-N / F1–F4：枚举漏掉的整片（raw 白名单闸）', () => {
+  /**
+   * 测试席在 `cf9691d` 的复测里给的反例：同一病灶（「归一后与正常同形 → 护栏放行 →
+   * 注册成收任意参数」）还有未覆盖的整片。以下四类当时**全部静默压平 → 注册成功 →
+   * 宿主对原样输入拒绝**，而本轮新增的注释/测试同时宣称「覆盖整类」。
+   *
+   * 处置：加 **raw 白名单闸**（`checkRawSchemaSubset` = `checkSupportedSchema` 的
+   * 语义 − 🟡-G 的有意宽松），让「覆盖整类」成真。每条都带：
+   * - **抛前零注册**（`registeredCount === 0`）；
+   * - **宿主双向断言**（原样输入宿主拒绝 / 合法形态宿主放行）。
+   */
+
+  /** F1：根组合子与其它 keyword——`oneOf` 被拦，`anyOf` 一字之差放行。 */
+  const F1 = [
+    ['anyOf', { anyOf: [{ type: 'string' }, { type: 'number' }] }],
+    ['allOf', { allOf: [{ type: 'object', properties: { a: { type: 'string' } } }] }],
+    ['not', { not: { type: 'string' } }],
+    ['$ref', { $ref: '#/definitions/x' }],
+    ['if…then', { if: { type: 'object' }, then: { required: ['a'] } }],
+    ['minProperties', { type: 'object', minProperties: 2 }],
+    ['patternProperties', { type: 'object', patternProperties: { '^a': { type: 'string' } } }],
+    ['propertyNames', { type: 'object', propertyNames: { pattern: '^a' } }],
+  ];
+
+  /** F2：嵌套层约束——`properties.a` 上的关键字整片丢失。 */
+  const F2 = [
+    ['pattern', { type: 'object', properties: { a: { type: 'string', pattern: '^x' } } }],
+    ['minLength', { type: 'object', properties: { a: { type: 'string', minLength: 3 } } }],
+    ['format', { type: 'object', properties: { a: { type: 'string', format: 'email' } } }],
+    ['maximum', { type: 'object', properties: { a: { type: 'number', maximum: 10 } } }],
+    ['minItems', { type: 'object', properties: { a: { type: 'array', items: { type: 'string' }, minItems: 1 } } }],
+    ['嵌套 anyOf', { type: 'object', properties: { a: { anyOf: [{ type: 'string' }, { type: 'number' }] } } }],
+  ];
+
+  /** F3：布尔 `additionalProperties` **单独出现**（无 `type`、无 `properties`）。 */
+  const F3 = [
+    ['根布尔 ap 单独出现', { additionalProperties: false }],
+    ['嵌套非布尔 ap', { type: 'object', properties: { a: { type: 'object', additionalProperties: 'no' } } }],
+  ];
+
+  /** F4：`required` 被收敛掉作者声明的名字（**放宽**）。 */
+  const F4 = [
+    ['required 被过滤', { type: 'object', properties: { a: { type: 'string' } }, required: ['a', 'b'] }],
+  ];
+
+  const GROUPS = [
+    ['F1 根组合子/其它 keyword', F1],
+    ['F2 嵌套层约束', F2],
+    ['F3 布尔 ap 单独出现', F3],
+    ['F4 required 被过滤', F4],
+  ];
+
+  for (const [label, cases] of GROUPS) {
+    it(`${label}：一律抛错，且抛前零注册`, () => {
+      for (const [name, raw] of cases) {
+        registeredCount = 0;
+        probeSchema = raw;
+        expect(() => mount(), `${label} / ${name} 会被压平 → 必须抛`).toThrow(/压平护栏拦下的根约束/);
+        expect(registeredCount, `${label} / ${name}：抛错前不得注册任何工具`).toBe(0);
+      }
+    });
+  }
+
+  it('F1–F4 的反例，宿主 assertObjectJsonSchema 同样拒绝（护栏拦的是真问题）', () => {
+    expect(hostAvailable, '差分 oracle 的宿主依赖不可用：本用例必须真跑，不得静默跳过').toBe(true);
+    for (const [, cases] of GROUPS) {
+      for (const [name, raw] of cases) {
+        expect(
+          () => assertObjectJsonSchema(raw),
+          `宿主应拒绝原样 ${name}: ${JSON.stringify(raw)}`,
+        ).toThrow();
+      }
+    }
+  });
+
+  it('反例确实「归一后与正常同形」——证明护栏拦的是压平，不是形状错误', () => {
+    // 张力所在：这些输入经 normalizeSchema 后**与合法形态无法区分**，
+    // 注册期自检也放行。所以只能在 raw 上看。
+    for (const [name, raw] of [...F1, ...F2, ...F3, ...F4]) {
+      expect(checkSupportedSchema(normalizeSchema(raw)), `${name}：归一结果必须能通过自检（否则本用例是假的）`).toEqual([]);
+    }
+  });
+
+  it('不误伤：合法形态照常注册（白名单闸不是「见谁都抛」）', () => {
+    for (const raw of [
+      { type: 'object', properties: { a: { type: 'string', enum: ['x'] } } },
+      { type: 'object', properties: { a: { type: 'string', const: 'x' } } },
+      { type: 'object', properties: { a: { oneOf: [{ type: 'string' }, { type: 'number' }] } } },
+      { type: 'object', properties: { a: { type: 'array', items: { type: 'string' } } } },
+      { type: 'object', properties: { a: { type: 'integer' } } },
+      { type: 'object', properties: { a: { type: 'null' } } },
+      { type: 'object', properties: { a: { type: 'string', description: 'd', title: 't' } }, required: ['a'] },
+      { type: 'object', properties: { a: { type: 'string' } }, additionalProperties: false },
+      { type: 'object', properties: {} },
+    ]) {
+      registeredCount = 0;
+      probeSchema = raw;
+      expect(mount().map((d) => d.name), JSON.stringify(raw)).toEqual(['browser_probe_tool']);
+    }
+  });
+
+  it('🟡-G 的有意宽松不被白名单闸误杀：**嵌套** oneOf 兄弟 keyword 仍放行', () => {
+    // 白名单闸 = `checkSupportedSchema(raw)` − oneOf 兄弟豁免。若退化成裸调用，
+    // 下列全部会抛——那是把 🟡-G 明确接受的宽松换成了响亮失败，不是本闸的目的。
+    //
+    // **口径必须分清根与嵌套**（本轮实测，别再写全称句）：
+    // - **根**上的 `{ oneOf:[…], type:'string' }` 等**本来就被枚举层拦**（`丢掉根
+    //   oneOf` + `丢掉根 type(...)`）——那是 🟡-K 的核心病灶（根压平成「收任意
+    //   参数」），本护栏**继续拦**，不是误杀。真正受益于 🟡-G 宽松的是**嵌套**位置：
+    //   `properties.a` 上的 `oneOf` 兄弟 keyword，根仍是合法对象，不会变宽。
+    // - 所以本条只断言**嵌套**位置放行。宿主对**原样**输入仍一律拒绝，这是设计
+    //   如此（见 `docs/dsh-compat.md`），不是本用例的反例。
+    for (const raw of [
+      { type: 'object', properties: { a: { oneOf: [{ type: 'string' }, { type: 'number' }], type: 'string' } } },
+      { type: 'object', properties: { a: { oneOf: [{ type: 'string' }, { type: 'number' }], enum: ['x'] } } },
+      { type: 'object', properties: { a: { oneOf: [{ type: 'string' }, { type: 'number' }], properties: { x: { type: 'string' } } } } },
+      { type: 'object', properties: { a: { oneOf: [{ type: 'string' }, { type: 'number' }], required: ['x'] } } },
+      { type: 'object', properties: { a: { oneOf: [{ type: 'string' }, { type: 'number' }], const: 'x' } } },
+      { type: 'object', properties: { a: { oneOf: [{ type: 'string' }, { type: 'number' }], items: { type: 'string' } } } },
+      { type: 'object', properties: { a: { oneOf: [{ type: 'string' }, { type: 'number' }], additionalProperties: false } } },
+    ]) {
+      registeredCount = 0;
+      probeSchema = raw;
+      expect(mount().map((d) => d.name), `🟡-G 有意宽松被误杀：${JSON.stringify(raw)}`).toEqual([
+        'browser_probe_tool',
+      ]);
+    }
+  });
+
+  it('根上的 oneOf 兄弟 keyword 照旧拦（🟡-K 的原始病灶，不属于 🟡-G 豁免范围）', () => {
+    // 与上一条配对，避免「豁免」被读成「凡 oneOf 兄弟都放行」。
+    for (const raw of [
+      { oneOf: [{ type: 'string' }, { type: 'number' }], type: 'string' },
+      { oneOf: [{ type: 'string' }, { type: 'number' }], enum: ['x'] },
+      { oneOf: [{ type: 'string' }, { type: 'number' }], additionalProperties: false },
+      { type: 'object', oneOf: [{ type: 'string' }, { type: 'number' }] },
+    ]) {
+      registeredCount = 0;
+      probeSchema = raw;
+      expect(() => mount(), `${JSON.stringify(raw)} 会压成「收任意参数」→ 必须抛`).toThrow(
+        /压平护栏拦下的根约束/,
+      );
+      expect(registeredCount, '抛错前不得注册').toBe(0);
+    }
+  });
+
+  it('豁免不得扩大：oneOf 节点上另有**非兄弟**违规时照旧抛', () => {
+    // 若豁免口径写成「只要这个节点有 oneOf 就全豁免」，下面这些会被放走——
+    // 它们归一后**丢的不止兄弟 keyword**，正是本闸要拦的。
+    for (const raw of [
+      { type: 'object', properties: { a: { oneOf: [{ type: 'string' }, { type: 'number' }], anyOf: [{ type: 'string' }] } } },
+      { type: 'object', properties: { a: { oneOf: [{ type: 'string' }, { type: 'number' }], pattern: '^x' } } },
+      // 分支自身的违规不豁免
+      { type: 'object', properties: { a: { oneOf: [{ type: 'object', properties: { x: { type: 'string', pattern: '^x' } } }, { type: 'number' }] } } },
+    ]) {
+      registeredCount = 0;
+      probeSchema = raw;
+      expect(() => mount(), `${JSON.stringify(raw)} 归一后丢的不止兄弟 keyword → 必须抛`).toThrow(
+        /压平护栏拦下的根约束/,
+      );
+      expect(registeredCount, '抛错前不得注册').toBe(0);
     }
   });
 });

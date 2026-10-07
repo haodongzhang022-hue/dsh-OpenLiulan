@@ -415,6 +415,92 @@ export function checkSupportedSchema(schema: unknown, path = "schema"): string[]
 }
 
 /**
+ * 校验**原始（未归一）** schema 的 keyword 白名单——压平护栏的第一道闸。
+ *
+ * 存在的理由（🟡-N / 测试席 F1–F4）：{@link normalizeSchema} 是**逐 keyword 手工
+ * 收敛**的，它认识 `oneOf` / `enum` / `const` / `items`，对 `anyOf` / `pattern` /
+ * `minProperties` 这些**一字之差**的 keyword 则整片静默丢弃。于是
+ * `{ type:'object', properties:{ a:{ type:'string', pattern:'^x' } } }` 归一后
+ * 与「作者本来就没写 pattern」同形，护栏（枚举态）与注册期自检（只看归一结果）
+ * **双双放行**，工具注册成功、约束已丢——宿主对原样输入直接拒绝。
+ *
+ * 所以判据不能是「枚举出我们认识的 keyword」，只能是「**作者原样的 schema 是否
+ * 已经落在受支持子集内**」。这正是 {@link checkSupportedSchema} 的语义，故此处直接
+ * 复用它——**判定只有一份实现**，避免又一处「两份副本漂移」（必修 1 的教训）。
+ *
+ * **唯一的减法是有意的宽松归一**（🟡-G）：`{ oneOf:[…], type:'string' }` 这类
+ * **`oneOf` 与兄弟 keyword 并写**的节点，本模块会丢弃兄弟、只留 `oneOf`，以免插件
+ * 整体加载失败；而 `checkSupportedSchema`（与宿主）对此判 `cannot declare both` /
+ * `is not supported beside oneOf`。若不为它开豁免，B 方案会把这类 schema 也拦下，
+ * 等于用「响亮失败」换掉了 🟡-G 明确接受的宽松——那不是本闸的目的。
+ *
+ * 豁免口径（**逐节点**、**只豁免 oneOf 与非 oneOf 的冲突**）：
+ * 「该节点所有**非 oneOf 相关**的违规」「该节点不以 `oneOf` 为基（即不含兄弟 keyword）
+ * 却声明了 `type`」，这些**都不豁免**；只有「`oneOf` 与兄弟 keyword 冲突」这一类，
+ * 在该节点**归一时兄弟 keyword 确实被整体丢弃**的前提下被豁免（`type` 是隐含的
+ * object 根，判据见下）。`oneOf` 各分支照旧下钻，分支自己的违规不豁免。
+ *
+ * 违反此条会把 F1 的 `{ anyOf:[…] }` 一并放走——`anyOf` 不是兄弟 keyword，
+ * 归一后被整个丢掉且不留 `oneOf`，必须仍然抛。
+ *
+ * @param raw - MCP 侧原始 schema（**未归一**）。
+ * @returns 违规描述列表；空数组代表「原样已受支持，或只做了 🟡-G 的有意宽松」。
+ * @see test/plugin-object-root.test.mjs 的 F1–F4 用例（含宿主双向断言）
+ */
+export function checkRawSchemaSubset(raw: unknown): string[] {
+  // 先收全量违规再解码（`checkSupportedSchema` 是深度优先，遇 oneOf 会 `return`，
+  // 所以不能边遍历边判定）。
+  const violations = [...checkSupportedSchema(raw)];
+  const exempt = new Set<string>();
+
+  const escape = (path: string): string => path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const clause = (path: string): RegExp =>
+    new RegExp(`^${escape(path)}(?:\\.([^.]+) is not supported beside oneOf| cannot declare both type and oneOf)$`);
+  /** 该违规是否属「`oneOf` 与非 `oneOf` 的兄弟 keyword 冲突」这一类。 */
+  const isSiblingClause = (path: string, message: string): boolean => {
+    const match = clause(path).exec(message);
+    return match !== null && (match[1] === undefined || ONE_OF_SIBLING_KEYWORDS.includes(match[1]));
+  };
+
+  const walk = (node: unknown, path: string): void => {
+    if (!isRecord(node)) return;
+    if (Array.isArray(node.oneOf) && node.oneOf.length > 0) {
+      // 判据不是「还剩哪些 key」，而是「本节点在 raw 上的违规**是否全部**属
+      // 『`oneOf` 与非 `oneOf` 的兄弟 keyword 冲突』这一类」。这才对应
+      // 「归一后这些兄弟 keyword 被整体丢弃」这一后果：
+      // - `{ oneOf:[…], enum:['x'] }` → 唯一违规是 `enum … beside oneOf` → 豁免；
+      // - `{ oneOf:[…], pattern:'^x' }` → 违规是未知 keyword `pattern`，不属该类 → 抛；
+      // - `{ oneOf:[…], required:['x'] }` → 违规是 `required … beside oneOf`
+      //   （`required` 在 `ONE_OF_SIBLING_KEYWORDS` 里）→ 豁免，与归一丢弃一致；
+      // - 分支自身的违规不带本节点前缀，由下面的递归自行计入，不在此处豁免。
+      // 「本节点」= 以 `path` 起头（`schema.xxx …`）或整条消息就是本节点级
+      // （`schema cannot declare both type and oneOf`，无点号）且**不是**分支违规。
+      const ownViolations = violations.filter(
+        (violation) =>
+          !violation.startsWith(`${path}.oneOf`) &&
+          (violation === path || violation.startsWith(`${path}.`) || violation.startsWith(`${path} `)),
+      );
+      if (ownViolations.length > 0 && ownViolations.every((violation) => isSiblingClause(path, violation))) {
+        for (const violation of ownViolations) exempt.add(violation);
+      }
+      node.oneOf.forEach((branch, index) => walk(branch, `${path}.oneOf[${index}]`));
+      return;
+    }
+    for (const key of Object.keys(node)) {
+      const child = node[key];
+      if (key === "properties" && isRecord(child)) {
+        for (const [name, property] of Object.entries(child)) walk(property, `${path}.${key}.${name}`);
+      } else if (key === "items") {
+        walk(child, `${path}.${key}`);
+      }
+    }
+  };
+
+  walk(raw, "schema");
+  return violations.filter((violation) => !exempt.has(violation));
+}
+
+/**
  * 校验一个值是否满足 {@link SupportedSchemaNode} 的判定语义。
  *
  * 判定与 DSH 的 `validateJsonSchemaValue` 对齐（只覆盖受支持子集），

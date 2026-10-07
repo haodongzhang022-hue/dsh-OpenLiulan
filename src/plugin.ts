@@ -48,7 +48,13 @@
  * @module @openliulan/dsh-openliulan
  */
 import { ForgeMcp } from "@openliulan/mcp-server";
-import { checkSupportedSchema, isPlainRecord, normalizeSchema, type SupportedSchemaNode } from "./dsh-schema.js";
+import {
+  checkRawSchemaSubset,
+  checkSupportedSchema,
+  isPlainRecord,
+  normalizeSchema,
+  type SupportedSchemaNode,
+} from "./dsh-schema.js";
 import type { HostContext, HostToolRunContext, SupportedParameters } from "./dsh-types.js";
 
 /** Cordis 插件名（用于 loader 诊断）。 */
@@ -241,7 +247,14 @@ export function apply(ctx: HostContext, config: Record<string, unknown> = {}): v
     // 护栏存在的理由是**本模块自检也拦不住压平**（压平后的 parameters 合法），
     // 只能在这里拦。未来维护者别因为「宿主会拒」而放松这里。
     //
-    // 覆盖整类，判据分三层（前两层看 **raw**，第三层看 **normalized**）：
+    // **覆盖面（🟡-N 校正过）**：判据分四层。前三层是**枚举**的，抓的是几何形状
+    // 已知的那几类；第四层是**白名单**，抓的是「枚举漏掉、但归一同样会丢」的整片。
+    //
+    // 关于措辞的一段历史：此处曾写「覆盖整类」。那是**无例支撑的全称断言**——
+    // `ROOT_ONLY_KEYWORDS` 是手工枚举，`anyOf` / `pattern` / `minProperties` 一字之差
+    // 就整片放行（测试席 F1–F4 已证）。现在枚举层只说它枚举了什么，全称性由
+    // 第 4 层的白名单闸承担，并有逐类用例（`test/plugin-object-root.test.mjs`）。
+    //
     // 1. **根必须是记录**（🟡-1）：`'oops'` / `42` / `null` / `[{…}]` / `undefined`
     //    会被 normalizeSchema 归成 `{}`，护栏与自检**双双放行**，注册成
     //    「收任意参数」——与 🟡-K 同类，是它漏掉的子面。宿主对同一份原样输入直接
@@ -263,6 +276,27 @@ export function apply(ctx: HostContext, config: Record<string, unknown> = {}): v
     //    所以两判据对 `{ type:'string' }` 重叠、对非法声明互补；缺 raw 判据则
     //    非法声明漏网（回归 204 全绿的那种漏）。宿主对原样输入一律拒绝
     //    （`schema.type must be one of …`）。
+    //    **精度备注（测试席穷举 112 万 + 42 万组后给出）**：`normalized.type`
+    //    从不**单独**命中——凡它命中处，第 3 层的 raw 判据必同时命中。所以这两条
+    //    是**行为冗余**（互补性只对「非法声明」成立，而那靠的是 raw 判据本身），
+    //    不是「缺任一层都会漏」。保留它只为让诊断文案同时指出归一后的类型；
+    //    删掉它零行为变化（🟡-2b 的 `toMatch(/type=string/)` 是**消息断言**，
+    //    不是行为断言）。
+    // 4. **raw 白名单闸**（🟡-N / 测试席 F1–F4）：前三层枚举的是「我们**认识**的
+    //    会丢的 keyword」，而真正会丢的是「`normalizeSchema` **不认识**的一切」。
+    //    两者不等价：`anyOf` / `allOf` / `not` / `$ref` / `if…then` /
+    //    `minProperties` / `patternProperties` / `propertyNames` 作根（F1），
+    //    `properties.a` 上的 `pattern` / `minLength` / `format` / `maximum` /
+    //    `minItems` / 嵌套 `anyOf`（F2），`{additionalProperties:false}` 单独出现
+    //    （F3：无 `type`、无 `properties` → `looksObject` 为假 → keyword 整个丢），
+    //    以及 `required` 被收敛掉作者声明的名字（F4）——全部**静默压平 → 注册成功
+    //    → 宿主对原样输入拒绝**。前三层一个都拦不住。
+    //    所以第 4 层不问「我们认识什么」，只问「**作者原样的 schema 是否已落在受支持
+    //    子集内**」——直接复用 `checkRawSchemaSubset()`（`checkSupportedSchema` 的
+    //    语义），**判定只有一份实现**。减去的是 🟡-G 明确接受的有意宽松
+    //    （`oneOf` 与兄弟 keyword 并写的豁免），豁免口径与证明见该函数与 docs。
+    //    真实工具表 8/8 通过、9 种合法形态（嵌套 `enum`/`const`/`oneOf`/注解/数组/
+    //    integer/null…）全放行——不误伤。
     // 影响面：8/8 工具都是 `{ type:'object', properties }`，今天不可达；MCP 协议本就
     // 要求对象根，属健壮性护栏。
     const ROOT_ONLY_KEYWORDS = ["oneOf", "enum", "const", "items"] as const;
@@ -286,10 +320,15 @@ export function apply(ctx: HostContext, config: Record<string, unknown> = {}): v
       // 归一后非法声明会消失，所以这一层必须在 raw 上看。
       rootReasons.push(`丢掉根 type(${JSON.stringify(rawInput.type)})`);
     }
+    // 第 4 层：raw 白名单闸（枚举漏掉的那整片）。放在最后，让枚举层先给出更精确的
+    // 原因；两者都不命中的输入才会走到这里。
+    for (const violation of checkRawSchemaSubset(rawInput)) {
+      rootReasons.push(`原样 schema 不在受支持子集内（${violation}）`);
+    }
     if (rootReasons.length > 0) {
       throw new Error(
         `[openliulan] ${publicName} inputSchema 的根必须是纯对象 schema（DSH ParameterJsonSchema 要求对象根；` +
-          `parameters 表达不了的根约束: ${rootReasons.join(" / ")}）: ` +
+          `压平护栏拦下的根约束: ${rootReasons.join(" / ")}）: ` +
           JSON.stringify(tool.inputSchema),
       );
     }
@@ -387,4 +426,10 @@ export function loadProfile(prefix = DEFAULT_PREFIX): LoadedProfile | undefined 
  * （`lib/index.js`）校验 schema，而不必依赖 Node 的 TS 剥离能力。
  * DSH 只读 `apply` / `name` / `inject`，额外导出不影响加载。
  */
-export { checkSupportedSchema, isPlainRecord, normalizeSchema, validateAgainstSchema } from "./dsh-schema.js";
+export {
+  checkRawSchemaSubset,
+  checkSupportedSchema,
+  isPlainRecord,
+  normalizeSchema,
+  validateAgainstSchema,
+} from "./dsh-schema.js";

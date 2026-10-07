@@ -124,10 +124,52 @@ parameters 的运行期兜底。
 同样被静默丢掉——只看 normalized 会漏 `{ type:'object', items:… }`、`{ type:['string'] }`、
 `{ type:'strin' }`。只有「归一后根 `type` 非 `object`」这一层该看 normalized。
 
-影响面：8/8 工具都是 `{ type:'object', properties }`，今天不可达；MCP 协议本就要求
-对象根，属健壮性。两个方向由 `test/plugin-object-root.test.mjs` 钉住：会被压平的
-输入必抛（且**抛前零注册**），纯对象根照常注册且**原有 `properties` / `required`
-不被压平**。
+### raw 白名单闸（🟡-N）：枚举拦不住的整片
+
+上面那张表是**枚举**出来的。枚举的问题是「我们认识什么」与「归一实际会丢什么」不等价——
+`anyOf` / `allOf` / `not` / `$ref` / `if…then` / `minProperties` / `patternProperties` /
+`propertyNames` 作根，`properties.a` 上的 `pattern` / `minLength` / `format` / `maximum` /
+`minItems` / 嵌套 `anyOf`，`{ additionalProperties:false }` 单独出现，以及 `required`
+被收敛掉作者声明的名字——**全部静默压平 → 注册成功 → 宿主对原样输入拒绝**，
+枚举层一个都拦不住。
+
+所以护栏补了第 4 层：**raw 白名单闸**（`checkRawSchemaSubset()`）。它不问「我们认识
+什么」，只问「**作者原样的 schema 是否已落在受支持子集内**」——直接复用
+`checkSupportedSchema()` 的语义，**判定只有一份实现**（避免又一处两份副本漂移）。
+
+| 分组 | 例子 | 归一后 | 枚举层 | raw 白名单闸 |
+| :--- | :--- | :--- | :--- | :--- |
+| F1 根组合子/其它 keyword | `{ anyOf:[…] }` / `{ minProperties:2 }` | `{}` → `{type:'object',properties:{}}` | 放行 | **抛** |
+| F2 嵌套层约束 | `properties.a` 上的 `pattern` / `format` / `minItems` | 约束整体丢失 | 放行 | **抛** |
+| F3 布尔 `ap` 单独出现 | `{ additionalProperties:false }` | `{}` | 放行 | **抛** |
+| F4 `required` 被过滤 | `{…, required:['a','b']}` → `['a']` | 放宽 | 放行 | **抛** |
+
+**唯一减法是有意的宽松归一（🟡-G）**：某 `oneOf` 节点在 **raw 上**的违规**全部**属
+「`oneOf` 与非 `oneOf` 的兄弟 keyword 冲突」这一类时豁免（归一确实把这些兄弟 keyword
+整体丢弃）；节点上的其它违规（未知 keyword、拼错的 `required`）照旧计入，`oneOf`
+各分支也照旧下钻、其违规不豁免。
+
+> ⚠️ **根 vs 嵌套，别混为一谈（实测）**：**根**上的 `{ oneOf:[…], type:'string' }`
+> **本来就被枚举层拦**（`丢掉根 oneOf` + `丢掉根 type(...)`），那是 🟡-K 的核心病灶，
+> 护栏**继续拦**。真正受益于 🟡-G 宽松的是**嵌套**位置——`properties.a` 上的 `oneOf`
+> 兄弟 keyword，根仍是合法对象、不会变宽。所以「凡 `oneOf` 兄弟都放行」是错的。
+
+> **措辞历史**：此处与 `plugin.ts` 曾写「护栏**覆盖整类**」。那是**无例支撑的全称
+> 断言**——枚举层 `anyOf` 一字之差就整片放行（测试席 F1–F4 已证）。现在枚举层只说
+> 它枚举了什么，全称性由 raw 白名单闸承担，并有 F1–F4 的逐类用例。
+
+影响面：8/8 工具都是 `{ type:'object', properties }`（raw 白名单闸 0 违规），今天
+不可达；MCP 协议本就要求对象根，属健壮性。两个方向由 `test/plugin-object-root.test.mjs`
+钉住：会被压平的输入必抛（且**抛前零注册**，含 F1–F4 四组逐类用例与宿主
+`assertObjectJsonSchema` 双向断言），纯对象根照常注册且**原有 `properties` / `required`
+不被压平**；9 种合法形态（嵌套 `enum` / `const` / `oneOf` / 注解 / 数组 / `integer` /
+`null` / 空 `properties` / 布尔 `ap`）全放行，证明不是「见谁都抛」。
+
+> ## 产物指标口径
+>
+> `lib/index.js` 的**权威指标是 `sha256`**（`sha256sum lib/index.js`），字节数用
+> `git cat-file -s HEAD:lib/index.js` 复核。**不要写第二套数**：曾出现卡片写
+> `938,807 B` 而实测 `947,909 B`（sha 对、大小错）——自报产物指标只该有一个来源。
 
 > 此前的 docstring 写「无论取值…**也无论位置是否受支持**」，位置那半为假——
 > 那正是一句**无例支撑的全称断言**。本轮把承诺收回取值维度，并为位置维度
