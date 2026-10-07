@@ -48,6 +48,50 @@ PTC-only 的 SDK 语义增强（如按 scope 调 `presentAs('ptc')`），留作�
 
 ---
 
+## 修复 · v1.3.0 补丁 — 测试侧 5 条 🟡P2 清零（2026-10-06）
+
+测试席在 PR #35 的验收结论（🟢 放行合并）里另报 5 条非功能 🟡P2。本补丁一并清掉，
+不改架构、不改浏览器控制能力。
+
+| 编号 | 问题 | 处置 |
+| :--- | :--- | :--- |
+| 🟡-1 | **非记录根 inputSchema 仍静默压平**：`'oops'` / `[{…}]` / `null` / `42` / `undefined` 作根 → `normalizeSchema` 归成 `{}`，护栏与自检**双双放行**，注册成「收任意参数」 | 压平护栏改为**先看 raw 记录形状**（`isPlainRecord`，从 `dsh-schema.ts` 导出），非记录根一律抛。用例 6 组，含「抛前零注册」 |
+| 🟡-2 | **`normalized.type` 分支零覆盖**：`{ type:'string' }` 确实被拦，但删掉该分支 204 全绿 | 补 `{ type:'string'\|'array'\|'number'\|'boolean' }` 用例；另补「两层判据互补」用例，逐条钉住「非法 `type` 只能靠 raw 拦、合法非对象 `type` 两层都能拦」 |
+| 🟡-3 | **根非法 `type` / 非法 `additionalProperties` 静默压平**：`{ type:['string'] }` / `{ type:'strin' }` / `{ type:42 }` 归一后被静默丢 `type`（与「没写 type」同形）；非布尔 `additionalProperties` 同理 | 护栏加判 raw 上的 `type` 声明（非 `"object"` 即抛）与非布尔 `additionalProperties`。**布尔 `additionalProperties` 保留放行**——那是 `parameters` 能表达的，拦了会误伤真实工具表 |
+| 🟡-4 | **新克隆 `npm ci` 后直接 `typecheck` 报 `TS2307` + `TS7006`** | CI 本就是 `build` → `test` 顺序，不受影响；README 的「离线环境亦可跑」对**新克隆**不成立，已更正为「需先 `npm run build`」并写明原因 |
+| 🟡-5 | **论据失实**：注释与 `docs/dsh-compat.md` 写「把原样 schema 当 parameters 交给宿主，宿主会拒绝」——实测**不成立** | 两条版本线的 `register()` 都只对 `output.schema` 跑 `assertSupportedJsonSchema`，**完全不校验 `parameters` 根**；`assertObjectJsonSchema` 在全部 `@deepseek-ai/*` 包内**除定义与导出外 0 个调用点**。论据换成「**本模块自检也拦不住压平**」，注释与文档同步更正 |
+
+**压平护栏的分层判据（三层互补，缺一即漏）**：
+
+```text
+1. raw 必须是普通记录                  ← 🟡-1：'oops'/42/null/[...] 归一成 {} 后无法区分
+2. raw 上不得有 parameters 表达不了的声明：
+   oneOf / enum / const / items        ← 🟡-K：压平丢掉整个取值约束
+   type 非 "object"                    ← 🟡-3：非法声明被 normalizeSchema 静默丢掉
+   additionalProperties 非布尔         ← 🟡-3：同上；布尔保留（parameters 能表达）
+3. normalized.type 必须是 object 或缺省 ← 🟡-2：合法但非对象的 type（{ type:'string' }）
+```
+
+第 2、3 层**天然重叠**（`{ type:'string' }` 两层都拦），第 1、2 层的 `type` 判定
+与第 3 层**互补**（非法 `type` 只有第 2 层拦得住）——故不能删任一层。
+
+**变异验证**（5 个分支逐个单点禁用，各自变红）：
+
+| 变异 | 结果 |
+| :--- | :--- |
+| 删「非记录根」判定 | 1 failed |
+| 删「raw `type`」判定 | 3 failed |
+| 删「`normalized.type`」判定 | 1 failed |
+| 清空 `ROOT_ONLY_KEYWORDS` | 2 failed |
+| 删「非布尔 `additionalProperties`」判定 | 1 failed |
+
+回归：`typecheck` 0 错 · `vitest run` **206 passed / 0 failed**（真浏览器 5 例因沙箱缺
+chromium 跳过，非本补丁）· `SMOKE_OK tools=8` · legacy + modern 双 `DSH_COMPAT_OK` ·
+注入真实 `@deepseek-ai/cordis` import → `build:plugin` **exit=1** 并报出 cosmokit + cordis
+两条路径，干净态 exit=0。
+
+---
+
 ## 修复 · v1.3.0 补丁 — CI 真实浏览器验收：断言不再绑第三方页面结构（2026-10-06）
 
 PR #35 的 CI 在 `test` 阶段红：`packages/engines/test/real-browser.acceptance.test.ts` 的

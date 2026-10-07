@@ -79,8 +79,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /**
  * 是否为普通记录（判定语义对齐宿主 `isPlainJsonRecord`）：
  * 原型为 `null` 或 `Object.prototype`，排除类实例 / `Date` / `Map` 等。
+ *
+ * 导出给 `src/plugin.ts` 的压平护栏用：`normalizeSchema` 对**非记录根**与 `{}`
+ * 都返回 `{}`，护栏必须能区分这两者，才能在压平前拦住 `'oops'` / `42` / `[...]`。
  */
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
+export function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const prototype = Object.getPrototypeOf(value);
   return prototype === null || prototype === Object.prototype;
@@ -165,7 +168,16 @@ export function isLosslessJson(value: unknown): boolean {
  * 因此本函数的返回值**不保证**通过 `checkSupportedSchema`；注册期自检才是最终闸门。
  *
  * 规则：
+ * - **非记录根**（`'oops'` / `42` / `null` / `[...]` / `undefined`）与 `{}` 一样
+ *   返回 `{}`（任意 JSON）。这是**有意的**宽松归一，但调用方必须自己判定「根原本
+ *   是不是记录」——`{}` 是合法对象根，`'oops'` 是形状错误，归一后两者**无法区分**。
+ *   `src/plugin.ts` 的压平护栏因此在看 normalized 之前先看 raw（🟡-1）。
  * - 只保留白名单 keyword；`oneOf` 与 `type` 互斥（保留 `oneOf`）。
+ * - **非法 `type` 声明被静默丢弃**：`{ type: ['string'] }`（数组）或
+ *   `{ type: 'strin' }`（拼错）归一后**没有 `type`**，与「作者没写 type」不可区分，
+ *   也会被压平成对象根。宿主对原样输入直接拒绝，故同样由调用方的压平护栏在
+ *   raw 上拦（🟡-3）。
+ * - **非布尔 `additionalProperties` 被静默丢弃**（🟡-3）。布尔值原样保留。
  * - `oneOf` 节点：**兄弟 keyword 一并丢弃**（含 `type` / `enum` / `const` /
  *   `properties` / `required` / `items` / `additionalProperties`）。DSH 子集禁止
  *   它们与 `oneOf` 共存，真实 schema 却常并写，保留会让插件整体加载失败；

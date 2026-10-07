@@ -63,8 +63,15 @@ DSH 的 `@deepseek-ai/dsh-tools` 已从 **`0.1.1` 线**演进到 **`0.1.6` 线**
 npm run test:plugin        # 假 ctx 冒烟：注册清单 + 真实 schema 自检 + 产物不内联宿主包
 npm run test:dsh-compat    # 真实宿主双版本验收：装真实 cordis+ToolRuntime 跑 legacy 与 modern
 npm run test               # 全量单测（含 schema 差分 oracle、取消鉴别力、构建期体检反证）
-npm run typecheck          # 源码类型检查（离线环境亦可跑）
+npm run typecheck          # 源码类型检查（**需先 npm run build**，见下）
 ```
+
+> **`typecheck` 的前置条件（🟡-4）**：`src/plugin.ts` 的 `@openliulan/mcp-server` 走 workspace
+> 包的 `main`/`types` 字段，而这些字段指向 `packages/*/dist`。**新克隆的仓库直接跑
+> `typecheck` 会报 `TS2307` + `TS7006`**——因为 `dist` 还没构建。先 `npm run build`
+> （或 `npm run build --workspace=@openliulan/mcp-server`）即可。
+> CI 的 `build-and-test` 任务本就是 `build` → `test` 顺序，不受影响；
+> 此前的文档写「离线环境亦可跑」，对**已有 `dist` 的工作区**成立、对新克隆不成立，已更正。
 
 > CI（`.cnb.yml`）在 `main` 与 `pull_request` 上各挂 `build-and-test` 与 `dsh-compat` 两条任务：
 > `build-and-test` 跑 `npm run build`（含构建期产物体检）+ `npm run test`（含假 ctx 冒烟、schema 差分、

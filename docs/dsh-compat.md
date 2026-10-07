@@ -99,16 +99,30 @@ checkSupportedSchema(parameters) = []              ← 注册期自检放行
 | `{ type:'string' }` / `{ type:'array', items:… }` | REJECT（根非对象） | 丢 `type` / `items` | 抛 |
 | `{ type:'object', enum:['x'] }` | REJECT | 丢 `enum` | 抛（**对象根，只看 `oneOf` 会漏**） |
 | `{ type:'object', const:{…} }` | REJECT | 丢 `const` | 抛 |
+| `'oops'` / `42` / `null` / `[{…}]` / `undefined`（非记录根） | REJECT（`must be a schema object`） | 归一成 `{}` → 压平 | 抛（**🟡-1：自检也放行**） |
+| `{ type:['string'] }` / `{ type:'strin' }`（非法 `type`） | REJECT（`type must be …`） | 丢 `type` → 压平 | 抛（**🟡-3：与「没写 type」同形**） |
+| `{ type:'object', properties:…, additionalProperties:'no' }` | REJECT（`must be a boolean`） | 丢该 keyword | 抛（**🟡-3**） |
 | `{ type:'object', properties:… }` | PASS | 无丢失 | 照常注册 |
+| `{ type:'object', properties:…, additionalProperties:false }` | PASS | 无丢失 | 照常注册（**布尔 = `parameters` 能表达，不拦**） |
 
-上表的「原样 schema 的宿主判定」用的是 **`assertObjectJsonSchema`**（parameters 根的
-校验器），不是 `assertSupportedJsonSchema`——后者只判**值 schema** 的 keyword 子集，
-对 `{oneOf:[…]}` 是**放行**的（`oneOf` 本就是受支持的取值维度）。拿错 oracle 会写出
-假断言（「宿主也拒绝 `{oneOf:[…]}`」并不成立），此处已实测校准。
+上表的「原样 schema 的宿主判定」用的是 **`assertObjectJsonSchema`**——它是一个**导出
+但未被调用**的校验器（全 `@deepseek-ai/*` 包内除定义与导出外 0 个调用点），不是
+parameters 的运行期兜底。
+
+**这里踩过一次坑（🟡-5）**：注释与本文档曾写「若改成把原样 schema 当 parameters 交给
+宿主，宿主 `assertObjectJsonSchema` 会直接拒绝（加载失败，可见）」。反事实探针证明
+**不成立**——两条版本线的 `register()` 都只对 `output.schema` 跑
+`assertSupportedJsonSchema`，**完全不校验 `parameters` 根**；把上表 5 种原样 schema
+直接交给宿主，**5/5 注册成功**。
+
+所以护栏的论据换成：**本模块自检也拦不住压平**（压平后的 parameters 合法且能通过
+`checkSupportedSchema`），只能在这里拦。结论不变（响亮失败优于静默变宽），但借口
+没了——别以为宿主是 parameters 的兜底而放松这里。
 
 护栏**看 raw 而非只看 normalized**：`items` 这类 keyword 在 `normalizeSchema` 里就
-被丢掉了（只在 `type:'array'` 下保留），只看 normalized 会漏
-`{ type:'object', items:… }`。
+被丢掉了（只在 `type:'array'` 下保留），非法 `type` 与非布尔 `additionalProperties`
+同样被静默丢掉——只看 normalized 会漏 `{ type:'object', items:… }`、`{ type:['string'] }`、
+`{ type:'strin' }`。只有「归一后根 `type` 非 `object`」这一层该看 normalized。
 
 影响面：8/8 工具都是 `{ type:'object', properties }`，今天不可达；MCP 协议本就要求
 对象根，属健壮性。两个方向由 `test/plugin-object-root.test.mjs` 钉住：会被压平的

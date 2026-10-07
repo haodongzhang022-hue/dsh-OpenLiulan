@@ -48,7 +48,7 @@
  * @module @openliulan/dsh-openliulan
  */
 import { ForgeMcp } from "@openliulan/mcp-server";
-import { checkSupportedSchema, normalizeSchema, type SupportedSchemaNode } from "./dsh-schema.js";
+import { checkSupportedSchema, isPlainRecord, normalizeSchema, type SupportedSchemaNode } from "./dsh-schema.js";
 import type { HostContext, HostToolRunContext, SupportedParameters } from "./dsh-types.js";
 
 /** Cordis 插件名（用于 loader 诊断）。 */
@@ -226,30 +226,70 @@ export function apply(ctx: HostContext, config: Record<string, unknown> = {}): v
     // 只在作者显式声明时保留，不擅自加严。
     const normalized = normalizeSchema(tool.inputSchema);
 
-    // 压平护栏（🟡-K）：下面的 `parameters` 只从 normalized 里取
+    // 压平护栏（🟡-K / 🟡-1 / 🟡-3）：下面的 `parameters` 只从 normalized 里取
     // `properties` / `required` / `additionalProperties`，**其余约束 keyword 会被
     // 静默丢掉**——工具注册成功，却变成「收任意参数」。压平后的 parameters 能通过
     // 注册期自检，自检看不出丢失，所以必须在这里拦。
     //
     // 丢的不是「位置不受支持的写法」（那是 🟡-G：`oneOf` 的兄弟 keyword），而是
-    // **整个取值约束**。压平这条路**看不见损失**：压出来的 parameters 同时通过本模块
-    // 自检与宿主校验，注册成功。若改成把原样 schema 当 parameters 交给宿主，宿主
-    // `assertObjectJsonSchema` 会直接拒绝（加载失败，可见）——所以这里选**抛**：
-    // 响亮失败优于静默变宽。
+    // **整个取值约束**。护栏选**抛**：响亮失败优于静默变宽。
     //
-    // 覆盖整类而不只是 `oneOf` 根。判据是「作者在**根**上声明了 `parameters`
-    // 表达不了的约束」——看 raw 而不只看 normalized：`items` 这类 keyword 在
-    // normalizeSchema 里就被丢掉了（只在 `type:'array'` 下保留），只看 normalized
-    // 会漏掉 `{ type:'object', items:… }`（宿主对原样输入同样直接拒绝）。
+    // **论据（🟡-5 校准过）**：宿主 `register()` 里的 `assertSupportedJsonSchema`
+    // 只校验 `output.schema`，**不看 `parameters` 根**；全 `@deepseek-ai/*` 包内
+    // `assertObjectJsonSchema` 除定义与导出外没有调用点。所以「交给宿主兜底」这条
+    // 退路不存在——`{oneOf:[…]}` / `{type:'string'}` 这类根，宿主注册阶段一律放行。
+    // 护栏存在的理由是**本模块自检也拦不住压平**（压平后的 parameters 合法），
+    // 只能在这里拦。未来维护者别因为「宿主会拒」而放松这里。
+    //
+    // 覆盖整类，判据分三层（前两层看 **raw**，第三层看 **normalized**）：
+    // 1. **根必须是记录**（🟡-1）：`'oops'` / `42` / `null` / `[{…}]` / `undefined`
+    //    会被 normalizeSchema 归成 `{}`，护栏与自检**双双放行**，注册成
+    //    「收任意参数」——与 🟡-K 同类，是它漏掉的子面。宿主对同一份原样输入直接
+    //    拒绝（`schema must be a schema object`）。`undefined` 与 `{}` 不同路径：
+    //    `{}` 是合法对象根，`'oops'` / `42` / `null` / `[{…}]` 是形状错误。
+    // 2. **根上 `parameters` 表达不了的约束 keyword**：`oneOf` / `enum` / `const` /
+    //    `items` 一律丢；`additionalProperties` 只在**非布尔**时丢（🟡-3，布尔是
+    //    `parameters` 能表达的，normalizeSchema 已保留，不拦以免误伤真实工具表）。
+    //    看 raw 而不只看 normalized：`items` 在 `type:'object'` 下就被 normalizeSchema
+    //    丢掉了，只看 normalized 会漏掉 `{ type:'object', items:… }`。
+    // 3. **根 `type` 声明必须是 `undefined` 或 `"object"`**：`{ type:'string' }` /
+    //    `{ type:['string'] }` / `{ type:'strin' }` / `{ type:42 }`（🟡-3）。
+    //    这一层拆成两个判据，因为它们**不冗余、只看其一都会漏一类**（实测）：
+    //    - `rawInput.type`：非法声明（数组 / 拼错 / 非字符串）会被 `normalizeSchema`
+    //      **静默丢掉**，归一成 `{}`，此时 `normalized.type` 是 `undefined`
+    //      ——**只有 raw 判据拦得住**。
+    //    - `normalized.type`：`{ type:'string' }` 这种合法但非对象的声明，
+    //      `normalizeSchema` **保留**了它，两个判据都会命中。
+    //    所以两判据对 `{ type:'string' }` 重叠、对非法声明互补；缺 raw 判据则
+    //    非法声明漏网（回归 204 全绿的那种漏）。宿主对原样输入一律拒绝
+    //    （`schema.type must be one of …`）。
     // 影响面：8/8 工具都是 `{ type:'object', properties }`，今天不可达；MCP 协议本就
     // 要求对象根，属健壮性护栏。
     const ROOT_ONLY_KEYWORDS = ["oneOf", "enum", "const", "items"] as const;
-    const rawInput = (tool.inputSchema ?? {}) as Record<string, unknown>;
-    const dropped = ROOT_ONLY_KEYWORDS.filter((key) => rawInput[key] !== undefined);
-    if (dropped.length > 0 || (normalized.type !== undefined && normalized.type !== "object")) {
+    const rawInput: unknown = tool.inputSchema;
+    const rootReasons: string[] = [];
+    if (!isPlainRecord(rawInput)) {
+      rootReasons.push(`根不是普通记录（${rawInput === null ? "null" : Array.isArray(rawInput) ? "array" : typeof rawInput}）`);
+    } else {
+      for (const key of ROOT_ONLY_KEYWORDS) {
+        if (rawInput[key] !== undefined) rootReasons.push(`丢掉根 ${key}`);
+      }
+      if (rawInput.additionalProperties !== undefined && typeof rawInput.additionalProperties !== "boolean") {
+        rootReasons.push(`丢掉根 additionalProperties(${typeof rawInput.additionalProperties})`);
+      }
+    }
+    if (normalized.type !== undefined && normalized.type !== "object") {
+      rootReasons.push(`type=${String(normalized.type)}`);
+    }
+    if (isPlainRecord(rawInput) && rawInput.type !== undefined && rawInput.type !== "object") {
+      // raw 上的 type 声明：非法（数组/拼错/非字符串）或合法但非对象（如 `'string'`）。
+      // 归一后非法声明会消失，所以这一层必须在 raw 上看。
+      rootReasons.push(`丢掉根 type(${JSON.stringify(rawInput.type)})`);
+    }
+    if (rootReasons.length > 0) {
       throw new Error(
         `[openliulan] ${publicName} inputSchema 的根必须是纯对象 schema（DSH ParameterJsonSchema 要求对象根；` +
-          `parameters 表达不了的根约束: ${dropped.length > 0 ? dropped.join("/") : `type=${String(normalized.type)}`}）: ` +
+          `parameters 表达不了的根约束: ${rootReasons.join(" / ")}）: ` +
           JSON.stringify(tool.inputSchema),
       );
     }
@@ -347,4 +387,4 @@ export function loadProfile(prefix = DEFAULT_PREFIX): LoadedProfile | undefined 
  * （`lib/index.js`）校验 schema，而不必依赖 Node 的 TS 剥离能力。
  * DSH 只读 `apply` / `name` / `inject`，额外导出不影响加载。
  */
-export { checkSupportedSchema, normalizeSchema, validateAgainstSchema } from "./dsh-schema.js";
+export { checkSupportedSchema, isPlainRecord, normalizeSchema, validateAgainstSchema } from "./dsh-schema.js";
