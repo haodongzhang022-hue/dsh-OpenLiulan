@@ -13,10 +13,34 @@
         - name: test
           script: |
             npm run test
+        # 离目录冒烟自检此前存在但不在 CI：插件产物坏了 CI 也不会红。
+        # 这里显式跑一次，覆盖注册清单 + 真实 schema 自检 + 产物不内联宿主包。
+        - name: plugin-smoke
+          script: |
+            npm run test:plugin
     # 云端 CI 冒烟（浏览器验收）：真实浏览器验证 + 方案库沉淀成长。
     # 推送到 main 后额外启动真实 Chromium 跑导航/断言/截图，失败即驱动 CI 红/绿；
     # 通过 --solution-repo 启用可成长方案库：错误二次触发推荐、未命中新错误记候选、
     # 报告注入已沉淀方案，供在线/本地 AI 决策引用。
+    # DSH 双版本适配验收（ISSUE #33）：插件要能同时装在旧版（Code mode 线）
+    # 与新版（PTC mode 线）DSH 上。这里在隔离临时目录各装一份真实宿主，
+    # 用真 ToolRuntime 装配 lib/index.js 跑注册清单、schema 子集与 dispatch 全链路。
+    - name: dsh-compat
+      docker:
+        image: node:22
+      stages:
+        - name: install
+          script: |
+            npm ci
+        - name: build-plugin
+          script: |
+            npm run build:plugin
+        - name: legacy-host
+          script: |
+            node scripts/dsh-compat-check.mjs legacy
+        - name: modern-host
+          script: |
+            node scripts/dsh-compat-check.mjs modern
     - name: browser-smoke
       docker:
         image: mcr.microsoft.com/playwright:v1.62.1-noble
@@ -48,3 +72,26 @@
             # 单测 + 真实浏览器验收（防止假装测试：
             # 必须真实控制浏览器并断言真实 DOM 状态）
             npm run test
+        # 离目录冒烟自检此前存在但不在 CI：插件产物坏了 CI 也不会红。
+        - name: plugin-smoke
+          script: |
+            npm run test:plugin
+    # DSH 双版本适配验收（ISSUE #33）：插件要能同时装在旧版（Code mode 线）
+    # 与新版（PTC mode 线）DSH 上。这里在隔离临时目录各装一份真实宿主，
+    # 用真 ToolRuntime 装配 lib/index.js 跑注册清单、schema 子集与 dispatch 全链路。
+    - name: dsh-compat
+      docker:
+        image: node:22
+      stages:
+        - name: install
+          script: |
+            npm ci
+        - name: build-plugin
+          script: |
+            npm run build:plugin
+        - name: legacy-host
+          script: |
+            node scripts/dsh-compat-check.mjs legacy
+        - name: modern-host
+          script: |
+            node scripts/dsh-compat-check.mjs modern

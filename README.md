@@ -17,7 +17,67 @@
 ## 📦 DSH 插件：一条命令安装与升级
 
 自 **v1.2.0（2026-08-29）** 起，dsh-OpenLiulan 打包为**可安装的 DSH 插件包**（`@openliulan/dsh-openliulan`）：
-它声明 `dsh.bundle.patch` 指向 `cordis.patch.yml`，把进程内 Forge 浏览器工具（`browser_observe` / `browser_act` / `browser_diagnose` / `browser_eval` / `browser_screenshot` / `browser_session_log` / `browser_close` / `browser_stealth_status`）一条命令装进 **dsh web profile**，装完重启 dsh web 即生效——无需手改配置、无需额外装 MCP。
+它声明 `dsh.bundle.patch` 指向 `cordis.patch.yml`，把进程内 Forge 浏览器工具
+（`browser_observe` / `browser_act` / `browser_diagnose` / `browser_eval` / `browser_screenshot` /
+`browser_session_log` / `browser_close` / `browser_stealth_status`）一条命令装进 **dsh web profile**，
+装完重启 dsh web 即生效——无需手改配置、无需额外装 MCP。
+
+自 **v1.3.0（2026-08-30）** 起，插件**同时适配 DSH 新旧两条版本线**（旧的 Code mode 线与新的 PTC mode 线），
+安装时无需选择通道；工具清单由 `@openliulan/mcp-server` 的工具表驱动，后续新增工具自动跟随注册。
+
+### DSH 版本兼容性（实测）
+
+DSH 的 `@deepseek-ai/dsh-tools` 已从 **`0.1.1` 线**演进到 **`0.1.6` 线**：聚合执行器由 Code Mode 改名为 PTC mode，
+`ToolRuntime.Config.mode` 取值由 `native|code|both` 变为 `native|ptc|both`，运行时服务由 `ctx.codeRuntime`
+变为 `ctx.ptcRuntime`，子调用会话事件由 `tool/code-dispatch` 改名为 `tool/ptc-dispatch`。
+
+**同一份 `lib/index.js` 两版都能装**——产物不内联任何 `@deepseek-ai/*` 宿主包（构建期强制体检），
+插件只依赖宿主注入的 `ctx.tools`，并在加载时探测版本线：
+
+| DSH 版本线 | 实测结果 |
+| :--- | :--- |
+| 旧版（Code mode 线） | `flavor=legacy` · 工具全部注册 · 适配验收通过 |
+| 新版（PTC mode 线） | `flavor=modern` · 工具全部注册 · 适配验收通过 |
+
+> 实测出处：Node.js `22.23.3` 与 `24.21.0` 上各跑一次
+> `node scripts/dsh-compat-check.mjs legacy|modern`，两条版本线均输出
+> `DSH_COMPAT_OK` 并以 0 退出（命令与退出码即证据，见 `docs/dsh-compat.md` §4）。
+
+新版对插件的两条硬约束与对应处置：
+
+| 新版约束 | 处置 |
+| :--- | :--- |
+| `output.schema` / `parameters` 受强制 JSON Schema 子集校验 | 统一走 `normalizeSchema()` 收敛 keyword 白名单（`const` / `enum` 一律保留、不做类型一致性修正；`oneOf` 节点的兄弟 keyword 例外，被有意丢弃）；根必须是**纯对象 schema**（`oneOf` 根 / 非 `object` 根 / 根上并写的 `enum`·`const`·`items` 一律直接抛错，不静默压成空对象丢掉约束）；注册前 `checkSupportedSchema()` 做**结构自检**，违规即加载失败 |
+| `execute(args, exec)` 必须尊重 `exec.signal` | 双参签名显式 `throwIfAborted()`，已中止的调用不触达工具体（证据：`test/plugin-cancel.test.mjs` 直接调工具体并统计 `callTool` 零调用） |
+
+另有一项**防御性保留**（不是硬约束）：`run_code` 是 DSH 保留工具名。
+插件所有工具都带 `prefix`（默认 `browser_`），命名上已天然规避；
+`assertNotReserved()` 只是兜底，真实调用路径上默认不可达（MCP 工具表里没有名为 `code` 的工具），
+其可达性边界由 `test/plugin-reserved-name.test.mjs` 钉住。
+
+> 完整的版本线差异对照、硬约束清单与验收细节见 [`docs/dsh-compat.md`](docs/dsh-compat.md)。
+
+自检命令（无需真的装 DSH）：
+
+```bash
+npm run test:plugin        # 假 ctx 冒烟：注册清单 + 真实 schema 自检 + 产物不内联宿主包
+npm run test:dsh-compat    # 真实宿主双版本验收：装真实 cordis+ToolRuntime 跑 legacy 与 modern
+npm run test               # 全量单测（含 schema 差分 oracle、取消鉴别力、构建期体检反证）
+npm run typecheck          # 源码类型检查（**需先 npm run build**，见下）
+```
+
+> **`typecheck` 的前置条件（🟡-4）**：`src/plugin.ts` 的 `@openliulan/mcp-server` 走 workspace
+> 包的 `main`/`types` 字段，而这些字段指向 `packages/*/dist`。**新克隆的仓库直接跑
+> `typecheck` 会报 `TS2307` + `TS7006`**——因为 `dist` 还没构建。先 `npm run build`
+> （或 `npm run build --workspace=@openliulan/mcp-server`）即可。
+> CI 的 `build-and-test` 任务本就是 `build` → `test` 顺序，不受影响；
+> 此前的文档写「离线环境亦可跑」，对**已有 `dist` 的工作区**成立、对新克隆不成立，已更正。
+
+> CI（`.cnb.yml`）在 `main` 与 `pull_request` 上各挂 `build-and-test` 与 `dsh-compat` 两条任务：
+> `build-and-test` 跑 `npm run build`（含构建期产物体检）+ `npm run test`（含假 ctx 冒烟、schema 差分、
+> 取消鉴别力、构建期体检反证）+ `npm run test:plugin`（离目录冒烟）；
+> `dsh-compat` 在隔离临时目录分别安装旧版与新版真实宿主，用真 `ToolRuntime` 装配 `lib/index.js`
+> 验收注册清单、版本线、schema 子集、dispatch 全链路与取消语义。任一失败即 CI 红。
 
 ### 一键安装（三种通道，任选其一）
 
