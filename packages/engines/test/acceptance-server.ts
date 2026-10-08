@@ -40,6 +40,10 @@ export async function startLocalSite(): Promise<LocalSite> {
     baseUrl: `http://127.0.0.1:${port}/`,
     close: () =>
       new Promise<void>((resolve) => {
+        // server.close() 会等待所有连接关闭，但 Chromium 的 keep-alive 连接
+        // 可能不会立即关闭，导致回调永远不触发、afterAll 卡住。
+        // closeAllConnections()（Node 18.2+）强制关闭所有连接，使 close 回调立即触发。
+        server.closeAllConnections?.();
         server.close(() => resolve());
       }),
   };

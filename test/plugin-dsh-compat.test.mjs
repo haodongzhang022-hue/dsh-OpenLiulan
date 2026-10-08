@@ -43,7 +43,7 @@ beforeAll(async () => {
   } catch {
     available = false;
   }
-});
+}, 30000); // hookTimeout：真实宿主装配 + 模块加载在慢机器上可超默认 10s
 
 /** 依赖缺失即失败：真宿主没跑过 = 结论不成立，不能算通过。 */
 function requireHost() {

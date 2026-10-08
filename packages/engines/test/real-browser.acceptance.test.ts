@@ -33,17 +33,19 @@ let engine: PlaywrightEngine;
 let forge: ForgeBrowser;
 let site: LocalSite;
 
+// hookTimeout：Chromium 冷启动 + 模块 transform 在慢机器/全量并发下可超默认 10s
+// （实测单独跑 beforeAll ~30s，全量并发时可超 60s）
 beforeAll(async () => {
   site = await startLocalSite();
   engine = new PlaywrightEngine({ headless: true });
   forge = new ForgeBrowser(engine, { autoDiagnoseOnError: true });
   await forge.start();
-});
+}, 120000);
 
 afterAll(async () => {
   await forge.stop();
   await site.close();
-});
+}, 120000); // afterAll 同样可能因 Chromium 关闭慢而超时
 
 describe("真实浏览器验收：本地 fixture 站点（结构可控，断言 DOM 真值）", () => {
   it("框架 navigate + observe 观察到真实 DOM", { timeout: BROWSER_TEST_TIMEOUT }, async () => {

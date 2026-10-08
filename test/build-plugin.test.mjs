@@ -99,13 +99,13 @@ describe('构建期体检（宿主包不得内联）', () => {
     expect(result.status, `干净入口也失败了，说明探针机制本身有问题\n${result.stdout}${result.stderr}`).toBe(0);
   });
 
-  it('注入真实宿主 import 时构建必须失败（反证：曾静默通过）', async () => {
+  it('注入真实宿主 import 时构建必须失败（反证：曾静默通过）', { timeout: 30000 }, async () => {
     const { failed, message } = await runCheck(HOST_INLINED);
     expect(failed, '注入宿主 import 后构建仍成功 → 体检是死代码').toBe(true);
     expect(message).toContain('@deepseek-ai');
   });
 
-  it('write:true（生产构建方式）下同样必须失败', async () => {
+  it('write:true（生产构建方式）下同样必须失败', { timeout: 30000 }, async () => {
     expect((await runCheck(HOST_INLINED, true)).failed).toBe(true);
   });
 
