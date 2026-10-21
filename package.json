@@ -28,7 +28,8 @@
     "lint": "npm run lint --workspaces --if-present",
     "dev": "node examples/quickstart.mjs",
     "test:plugin": "node test/plugin-smoke.mjs",
-    "test:dsh-compat": "node scripts/dsh-compat-check.mjs legacy && node scripts/dsh-compat-check.mjs modern"
+    "test:dsh-compat": "node scripts/dsh-compat-check.mjs legacy && node scripts/dsh-compat-check.mjs modern",
+    "typecheck": "tsc -p tsconfig.json"
   },
   "keywords": [
     "browser-automation",

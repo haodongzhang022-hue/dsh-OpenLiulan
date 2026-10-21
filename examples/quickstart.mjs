@@ -28,10 +28,11 @@ async function main() {
     console.log("可交互:", snap.interactive.slice(0, 5).map((e) => `${e.ref} <${e.tag}> "${e.text}"`).join("\n"));
 
     // 4. 提取内容
+    // 提取目标用 <title>：example.com 已移除 <h1>，绑 h1 的示例会静默取空值。
     const extract = await forge.act({
       type: "extract",
-      selector: "h1",
-      description: "提取页面主标题",
+      selector: "title",
+      description: "提取页面标题",
     });
     console.log("提取:", extract.data);
 

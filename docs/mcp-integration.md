@@ -205,7 +205,9 @@ npx forge-mcp --ci-spec ./ci-spec.json
   "steps": [
     { "action": "observe", "args": {} },
     { "action": "act", "args": { "type": "navigate", "url": "https://example.com" } },
-    { "action": "act", "args": { "type": "assert", "text": "Example", "mode": "text-contains" } },
+    // 断言目标用 <title> 而非第三方页面的 <h1>：example.com 已移除 h1，
+    // 绑它的断言会随站点改版凭空变红。
+    { "action": "act", "args": { "type": "assert", "selector": "title", "mode": "text-contains", "expected": "Example" } },
     { "action": "screenshot", "args": { "fullPage": true }, "nonFatal": true }
   ],
   "artifactDir": "./forge-artifacts",

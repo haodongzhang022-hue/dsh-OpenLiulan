@@ -20,7 +20,7 @@
  *
  * 形态在 dsh-tools `0.1.1`（旧版）与 `0.1.6`（新版）上一致；新版额外对
  * `output.schema` 执行强制 JSON Schema 子集校验（由
- * `src/dsh-schema.ts` 负责压平与自检）。
+ * `src/dsh-schema.ts` 负责 keyword 白名单收敛与自检）。
  */
 export interface HostToolDefinition {
   /** 工具名（全局唯一；`run_code` 为 DSH 保留名）。 */

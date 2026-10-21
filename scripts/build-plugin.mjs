@@ -10,12 +10,19 @@
  * 内联。`packages` 不设 external，否则内部包会被当外部依赖原样导出。
  *
  * ISSUE #33：产物**不内联任何 @deepseek-ai/* 运行时符号**。插件只依赖宿主
- * 注入的 `ctx.tools`，`@deepseek-ai/cordis` 仅作类型使用（esbuild 会擦除），
- * 因此同一份 lib/index.js 可同时装在旧版与新版的 DSH 上。
+ * 注入的 `ctx.tools`，因此同一份 lib/index.js 可同时装在旧版与新版的 DSH 上。
+ *
+ * 该约束由 `scripts/host-inlining-guard.mjs` 的 `assertNoHostInlining` 强制，
+ * **本脚本不再自带副本**。这里踩过一次双份漂移：体检被抽成独立模块后，本文件
+ * 仍留着一份读 `result.outputFiles` + 只 `errors.push()` 的旧副本，而真正被执行
+ * 的正是它——产物内联宿主后构建仍退出 0，修好的那份成了孤儿。
+ * 现在体检只有一份实现，`test/build-plugin.test.mjs` 直接对**本脚本**做反证。
  */
 import { build } from 'esbuild';
-import { resolve } from 'node:path';
+import { mkdirSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { assertNoHostInlining } from './host-inlining-guard.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 
@@ -33,26 +40,24 @@ const resolveOpenliulan = {
   },
 };
 
-/** 断言产物没有把 DSH 宿主包内联进来（跨版本兼容的硬约束）。 */
-const assertNoHostInlining = {
-  name: 'assert-no-host-inlining',
-  setup(build) {
-    build.onEnd((result) => {
-      if (result.errors.length > 0) return;
-      const contents = result.outputFiles?.[0]?.text ?? '';
-      const banned = ['@deepseek-ai/dsh-tools', '@deepseek-ai/cordis'];
-      for (const pkg of banned) {
-        if (contents.includes(`from "${pkg}"`) || contents.includes(`require("${pkg}")`)) {
-          result.errors.push({ text: `产物内联了宿主包 ${pkg}：会钉死 DSH 版本，破坏跨版本兼容` });
-        }
-      }
-    });
-  },
-};
+/**
+ * 入口 / 产物 / 元数据落点。生产路径用默认值；反证用例
+ * （`test/build-plugin.test.mjs`）用环境变量把入口换成含真实宿主 import 的
+ * 探针，断言**本脚本**非零退出——体检挂在生产路径上，不是平行实现。
+ *
+ * 这三个环境变量**仅供测试用**（`OPENLIULAN_BUILD_*`，见上）。它们能改生产
+ * 构建的入口与落盘位置，这是「让测试钉住生产脚本本身」的必要代价：不这么开
+ * 口子，反证就只能测平行实现，生产路径照样可以静默失效。**发布/CI 不得设置
+ * 它们**；未设置时行为与从前逐字节一致。
+ */
+const entryPoint = process.env.OPENLIULAN_BUILD_ENTRY ?? resolve(root, 'src/plugin.ts');
+const outfile = process.env.OPENLIULAN_BUILD_OUTFILE ?? resolve(root, 'lib/index.js');
+const metaFile =
+  process.env.OPENLIULAN_BUILD_METAFILE ?? resolve(root, 'node_modules/.cache/openliulan/build-metafile.json');
 
-await build({
-  entryPoints: [resolve(root, 'src/plugin.ts')],
-  outfile: resolve(root, 'lib/index.js'),
+const result = await build({
+  entryPoints: [entryPoint],
+  outfile,
   bundle: true,
   platform: 'node',
   format: 'esm',
@@ -60,8 +65,23 @@ await build({
   logLevel: 'info',
   sourcemap: 'inline',
   write: true,
+  // 构建期体检需要输入文件图；`write` 不影响 metafile 可用性。
+  metafile: true,
   plugins: [resolveOpenliulan, assertNoHostInlining],
   external: ['playwright', 'playwright-core'],
 });
 
-console.log('built lib/index.js');
+// 落盘构建元数据，供 `test/plugin-smoke.mjs` 用**同一份** findHostInputs()
+// 复核已落盘产物（此前的字符串匹配拦不住内联，只会给假绿）。
+mkdirSync(dirname(metaFile), { recursive: true });
+writeFileSync(
+  metaFile,
+  JSON.stringify({
+    outfile: relative(root, outfile),
+    bytes: statSync(outfile).size,
+    // 存完整 metafile：让下游用同一份 findHostInputs() 复核，而不是另写判定
+    metafile: result.metafile,
+  }),
+);
+
+console.log(`built ${relative(root, outfile)}`);

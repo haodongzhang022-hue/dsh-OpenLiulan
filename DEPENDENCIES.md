@@ -50,7 +50,9 @@ npx playwright install chromium
 ├── @openliulan/engines
 ├── @openliulan/diagnosis
 ├── @openliulan/token
-└── @openliulan/ai-layer
+├── @openliulan/ai-layer
+├── @openliulan/stealth
+└── @openliulan/game-profile
 
 @openliulan/engines
 ├── @openliulan/core
@@ -100,8 +102,12 @@ DSH 有两条接入通道，按下表选一：
 | 旧版（Code mode） | `0.1.1` 线（本仓库 devDependency 钉 `^0.1.1-rc.2`） | `native \| code \| both` | ✅ 实测通过 |
 | 新版（PTC mode） | `0.1.6` 线（CI 钉 `0.1.6-alpha.2`） | `native \| ptc \| both` | ✅ 实测通过 |
 
-`@deepseek-ai/cordis` 仅作类型使用（构建时被擦除）；`peerDependencies` 声明
-`^4.0.1`，两版宿主（`4.0.1` / `4.0.2`）均满足。
+> 「实测通过」的出处：`node scripts/dsh-compat-check.mjs legacy|modern` 在
+> Node.js `22.20.0` 上各跑一遍，两条线均输出 `DSH_COMPAT_OK` 且退出码为 0。
+> 未列出的 Node 版本**未经实测**，不作兼容性承诺。
+
+`@deepseek-ai/cordis` 仅作类型时使用（本仓库已改为本地结构化声明，构建时被擦除）；
+`peerDependencies` 声明 `^4.0.1`，两版宿主（`4.0.1` / `4.0.2`）均满足。
 
 自检命令：
 

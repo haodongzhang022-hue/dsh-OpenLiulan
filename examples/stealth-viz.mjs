@@ -48,11 +48,11 @@ async function main() {
     viz.record("action", `导航: ${nav.summary}`);
 
     // ─── 4. 提取数据 ───
-    viz.recordDecision("提取页面主标题", "获取页面 h1 内容作为采集字段");
+    viz.recordDecision("提取页面标题", "获取页面 <title> 作为采集字段（example.com 已移除 h1）");
     const extract = await forge.act({
       type: "extract",
-      selector: "h1",
-      description: "提取页面主标题",
+      selector: "title",
+      description: "提取页面标题",
     });
     console.log("提取:", extract.data);
     viz.record("action", `提取: ${JSON.stringify(extract.data)}`);
