@@ -78,11 +78,18 @@ console.log(`[dsh-compat] 版本线 = ${flavor}，临时目录 = ${dir}`);
 try {
   writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'dsh-compat-probe', private: true, type: 'module' }, null, 2));
   console.log(`[dsh-compat] 安装宿主依赖（${spec.deps.length} 个）...`);
-  execFileSync('npm', ['install', '--no-audit', '--no-fund', '--loglevel=error', ...spec.deps], {
-    cwd: dir, stdio: ['ignore', 'ignore', 'inherit'],
+  // npm 的跨平台调用：Windows 上 PATH 里的 `npm` 是**无扩展名的 shell 脚本**，
+  // 直接 spawn 会 ENOENT；而 `npm.cmd` 在无 shell 时被 Node 拒绝执行（EINVAL）。
+  // 故 Windows 走 `npm.cmd` + shell:true，POSIX 保持原样（Linux CI 行为不变）。
+  const npmBin = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  execFileSync(npmBin, ['install', '--no-audit', '--no-fund', '--loglevel=error', ...spec.deps], {
+    cwd: dir,
+    stdio: ['ignore', 'ignore', 'inherit'],
+    shell: process.platform === 'win32',
   });
 
   const probe = `
+import { pathToFileURL } from 'node:url';
 import { Context } from '@deepseek-ai/cordis';
 import ToolRuntime from '@deepseek-ai/dsh-tools';
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt';
@@ -99,16 +106,28 @@ await new Promise((r) => setTimeout(r, 100));
 const tools = ctx.get('tools');
 if (!tools) throw new Error('ctx.tools 未就绪：宿主未装配 ToolRuntime');
 
-const mod = await import(${JSON.stringify(bundle)});
+// 用 file:// URL：Windows 上绝对路径不是合法的 ESM 导入说明符
+// （ERR_UNSUPPORTED_ESM_URL_SCHEME），POSIX 上与原写法等价。
+const mod = await import(pathToFileURL(${JSON.stringify(bundle)}).href);
 if (typeof mod.apply !== 'function') throw new Error('插件未导出 apply');
 mod.apply({ tools, effect: (fn, label) => ctx.effect(fn, label) }, { prefix: 'browser' });
 
 const names = tools.schemas().map((s) => s.name).sort();
+if (names.some((n) => !n.startsWith('browser_'))) {
+  throw new Error('工具前缀不符（应全部为 browser_*）: ' + names.join(','));
+}
+// 精确匹配期望清单：多注册（漏了护栏的重复注册）与少注册都要红，
+// 不能只卡「>= 8」的下限——那会让新增/丢失工具都测不出来。
 if (JSON.stringify(names) !== JSON.stringify(EXPECTED)) {
   throw new Error('工具清单不符\\n  期望: ' + EXPECTED.join(',') + '\\n  实得: ' + names.join(','));
 }
 
 const profile = mod.loadProfile('browser');
+// 宿主可见清单必须与插件报告一致——防止「注册了但没进清单」或反之
+const reported = [...profile.tools].sort();
+if (JSON.stringify(names) !== JSON.stringify(reported)) {
+  throw new Error('宿主可见工具与插件报告不一致: 宿主=[' + names.join(',') + '] 插件=[' + reported.join(',') + ']');
+}
 if (profile.host.flavor !== ${JSON.stringify(spec.expected)}) {
   throw new Error('版本线探测不符：期望 ${spec.expected}，实得 ' + profile.host.flavor + '（' + profile.host.evidence + '）');
 }
