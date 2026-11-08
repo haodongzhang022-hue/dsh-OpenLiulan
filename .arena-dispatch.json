@@ -1,0 +1,8 @@
+{
+  "taskId": "lh-quota-probe-1108d",
+  "lane": "cnb-branch",
+  "repo": "dongdongxiaozu/dsh-OpenLiulan",
+  "base": "origin/main",
+  "branch": "lh/quota-probe-1108d",
+  "dispatched_at": "2026-11-08T13:49:10.840Z"
+}
